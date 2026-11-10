@@ -46,6 +46,10 @@ npm run dev      # http://localhost:5173
 npm run build    # static site in dist/ (relative paths, host anywhere)
 ```
 
+### Deploy (GitHub Pages)
+
+`.github/workflows/deploy-pages.yml` builds the site and publishes `dist/` to GitHub Pages on every push to `master` (or manually from the Actions tab). One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**. The site is then served at https://giansalex.github.io/appchain-3d/.
+
 URL flags: `?sim` (simulated chain), `?enter` (skip the intro and fly straight in).
 
 ## Stack
