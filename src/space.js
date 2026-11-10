@@ -1,12 +1,13 @@
 import * as THREE from 'three';
-import { NOISE_GLSL, dotTexture, hash01, makeLabel, srgbVec } from './util.js';
+import { NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec } from './util.js';
 
 const HUB_R = 9.5;
 const PLANET_R = 7.5;
 const RING_R = 54;
+const MAX_SHIPS = 14;
 
 // Home view: the included Cosmos chains as planets. The hub sits at the centre,
-// the other chains ring it. No chain data is loaded here — click a planet to enter it.
+// the other chains ring it. IBC transfers between them fly as ships; click a planet to enter it.
 export class Space {
   constructor(chains) {
     this.scene = new THREE.Scene();
@@ -14,6 +15,7 @@ export class Space {
     this.planets = new Map();
     this.hover = null;
     this.time = { value: 0 };
+    this.ships = [];
     this.buildStars();
     const ring = chains.filter((c) => !c.hub);
     chains.forEach((c) => {
@@ -115,7 +117,7 @@ export class Space {
     sub.position.set(0, r + 1.5, 0);
     group.add(body, atmo, label, sub);
     this.scene.add(group);
-    this.planets.set(chain.key, { chain, pos, r, body, uniforms, spin: 0.025 + hash01(chain.key, 3) * 0.03 });
+    this.planets.set(chain.key, { chain, pos, r, body, uniforms, kick: 0, spin: 0.025 + hash01(chain.key, 3) * 0.03 });
   }
 
   // Faint IBC lanes: every chain here has open channels to every other.
@@ -130,6 +132,33 @@ export class Space {
     this.scene.add(this.links);
   }
 
+  // An IBC transfer: a ship leaves one planet, arcs over the lane and lands on the other.
+  launchTransfer(fromKey, toKey, { label = '' } = {}) {
+    const a = this.planets.get(fromKey), b = this.planets.get(toKey);
+    if (!a || !b || a === b || this.ships.length >= MAX_SHIPS) return false;
+    const dir = b.pos.clone().sub(a.pos);
+    const dist = dir.length();
+    dir.normalize();
+    // Bow each flight off the straight lane (mostly upward, a little sideways) so ships don't stack.
+    const side = new THREE.Vector3().crossVectors(dir, new THREE.Vector3(0, 1, 0)).normalize();
+    const bow = new THREE.Vector3(0, 1, 0).multiplyScalar(dist * (0.14 + Math.random() * 0.1))
+      .addScaledVector(side, dist * (Math.random() - 0.5) * 0.22);
+    const mid = a.pos.clone().lerp(b.pos, 0.5).add(bow);
+    const start = a.pos.clone().addScaledVector(mid.clone().sub(a.pos).normalize(), a.r * 1.05);
+    const end = b.pos.clone().addScaledVector(mid.clone().sub(b.pos).normalize(), b.r * 1.05);
+    a.kick = Math.max(a.kick, 0.5);
+    this.ships.push(new Ship(this.scene, new THREE.QuadraticBezierCurve3(start, mid, end), {
+      color: a.chain.color, dur: 3.6 + dist / 22, size: 1.2, label, easing: ease.inOut,
+      onDone: () => { b.kick = 1; },
+    }));
+    return true;
+  }
+
+  clearShips() {
+    this.ships.forEach((s) => s.dispose());
+    this.ships = [];
+  }
+
   planet(key) { return this.planets.get(key); }
   setHover(key) { this.hover = key; }
 
@@ -139,7 +168,9 @@ export class Space {
     for (const [key, p] of this.planets) {
       p.body.rotation.y += dt * p.spin;
       const u = p.uniforms.uPulse;
-      u.value += ((key === this.hover ? 0.7 : 0) - u.value) * Math.min(1, dt * 6);
+      p.kick = Math.max(0, p.kick - dt * 0.9);
+      u.value += (Math.max(key === this.hover ? 0.7 : 0, p.kick) - u.value) * Math.min(1, dt * 6);
     }
+    this.ships = this.ships.filter((s) => s.update(dt));
   }
 }

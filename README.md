@@ -9,7 +9,7 @@ Included chains: **Juno** (`juno-1`), **Cosmos Hub** (`cosmoshub-4`), **Osmosis*
 **Home (in space)**
 
 - The six planets, with the Cosmos Hub at the centre and faint IBC lanes between them.
-- No chain data is loaded here; the HUD only shows how many chains are included.
+- IBC transfers on Cosmos Hub and Osmosis are watched live and fly as ships between the planets (when the lanes are quiet, recent real transfers are replayed and labelled as such). No other chain data is loaded here.
 - Click a planet (or its button in the dock, or keys `1`–`6`) to fly inside.
 
 **Inside a planet** (the same districts on every chain, themed in the chain's colour)

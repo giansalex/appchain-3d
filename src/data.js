@@ -1,6 +1,7 @@
 // Live data feed for one Cosmos chain (public LCD endpoints) with an offline simulation fallback.
 // Emits: status, validators, proposals, block, ibc, ibcHistory
-// A feed only runs while its planet is being visited: start() on entry, stop() on exit.
+// A full feed only runs while its planet is being visited: start() on entry, stop() on exit.
+// At home, startIbcWatch() runs a slim version (blocks → IBC transfers only) for a couple of chains.
 
 export const KINDS = {
   send: { label: 'Send', color: '#7dd3fc' },
@@ -66,7 +67,8 @@ function formatToken(amount, denom = '') {
 }
 
 export class ChainFeed {
-  constructor(chain, { forceSim = false } = {}) {
+  constructor(chain, { forceSim = false, pollMs = 1300 } = {}) {
+    this.pollMs = pollMs;
     this.chain = chain;
     this.endpoints = chain.endpoints;
     this.listeners = {};
@@ -142,6 +144,15 @@ export class ChainFeed {
     this.mode = 'sim';
     this.emit('status', { mode: 'sim' });
     this.startSimulation();
+  }
+
+  // IBC only: follow new blocks for transfers, skipping validators and governance.
+  // Unlike start() there is no silent simulation fallback — an unreachable chain just stays quiet.
+  startIbcWatch() {
+    if (this.forceSim) { this.mode = 'sim'; this.startSimulation(); return; }
+    this.mode = 'live';
+    this.loadIbcHistory().catch(() => {});
+    this.pollLoop();
   }
 
   // ---------- live ----------
@@ -275,7 +286,7 @@ export class ChainFeed {
     } catch (e) {
       if (++this.fails === 3) this.emit('status', { mode: 'live', reconnecting: true });
     }
-    this.after(1300, () => this.pollLoop());
+    this.after(this.pollMs, () => this.pollLoop());
   }
 
   async handleBlock({ block, txs, undecoded }) {
