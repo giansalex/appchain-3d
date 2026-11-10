@@ -104,11 +104,13 @@ function enterPlanet(chain) {
   current = chain;
   interior = new Interior(chain);
   resetHud(chain);
+  stopHomeFeeds();
   startFeed(chain);
   const { pos, r } = space.planet(chain.key);
   const dir = camera.position.clone().sub(pos).normalize();
   flyTo(pos.clone().addScaledVector(dir, r * 1.12).toArray(), pos.toArray(), 1.9, ease.in, () => {
     active = interior;
+    space.clearShips();
     renderPass.scene = interior.scene;
     document.body.className = 'mode-inside';
     setLimits();
@@ -136,6 +138,7 @@ function leavePlanet() {
       feed = null;
       active = space;
       renderPass.scene = space.scene;
+      startHomeFeeds();
       interior.dispose();
       interior = null;
       current = null;
@@ -360,8 +363,49 @@ function pushFeed(node) {
 }
 
 // ---------- data ----------
-// Nothing is fetched at home. Entering a planet starts that chain's feed; leaving stops it.
+// Entering a planet starts that chain's full feed; leaving stops it.
+// At home only IBC transfers are watched, and only on the two busiest routes' ends.
 const params = new URLSearchParams(location.search);
+const HOME_IBC = ['cosmoshub', 'osmosis'];
+const planetByChainId = new Map(PLANETS.map((p) => [p.chainId, p]));
+let homeFeeds = [], lastHomeIbcAt = 0, homeReplayIdx = 0;
+
+function homeTransfer(chain, ibc, replay = false) {
+  const other = planetByChainId.get(ibc.chainId);
+  if (!other || mode === 'inside' || document.hidden) return;
+  // A transfer between two watched chains is seen twice (sent here, received there): draw the send only.
+  if (ibc.dir === 'in' && HOME_IBC.includes(other.key)) return;
+  const [from, to] = ibc.dir === 'out' ? [chain, other] : [other, chain];
+  const label = `${ibc.amount || 'IBC transfer'}${replay ? ' · replay' : ''}`;
+  if (space.launchTransfer(from.key, to.key, { label }) && !replay) lastHomeIbcAt = performance.now();
+}
+
+function startHomeFeeds() {
+  stopHomeFeeds();
+  lastHomeIbcAt = performance.now();
+  homeFeeds = HOME_IBC.map((key) => {
+    const chain = planetByKey(key);
+    const f = new ChainFeed(chain, { forceSim: params.has('sim'), pollMs: 5000 });
+    f.on('ibc', (ibc) => homeTransfer(chain, ibc));
+    f.startIbcWatch();
+    return f;
+  });
+}
+
+function stopHomeFeeds() {
+  homeFeeds.forEach((f) => f.stop());
+  homeFeeds = [];
+}
+
+// When the lanes are quiet, replay real recent transfers (clearly labelled) so there is always traffic to watch.
+setInterval(() => {
+  if (mode !== 'space' || document.hidden || performance.now() - lastHomeIbcAt < 12000) return;
+  const pool = homeFeeds.flatMap((f) => (f.ibcHistory || [])
+    .filter((i) => planetByChainId.has(i.chainId)).map((i) => [f.chain, i]));
+  if (!pool.length) return;
+  const [chain, ibc] = pool[homeReplayIdx++ % pool.length];
+  homeTransfer(chain, ibc, true);
+}, 7000);
 let lastBlock = null, lastBlockAt = 0, witnessed = 0, lastIbcAt = 0, replayIdx = 0;
 
 function resetHud(chain) {
@@ -486,6 +530,7 @@ function frame() {
 Promise.race([document.fonts?.load('600 56px "Space Grotesk"') ?? Promise.resolve(), new Promise((r) => setTimeout(r, 1500))])
   .finally(() => {
     frame();
+    if (!params.has('enter')) startHomeFeeds();
     if (params.has('enter')) setTimeout(() => enterPlanet(planetByKey(params.get('enter')) || PLANETS[0]), 600);
   });
 
