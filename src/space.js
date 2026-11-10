@@ -1,21 +1,28 @@
 import * as THREE from 'three';
-import { CORAL, NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, tween } from './util.js';
-import { CHAINS, chainInfo } from './data.js';
+import { NOISE_GLSL, dotTexture, hash01, makeLabel, srgbVec } from './util.js';
 
-export const PLANET_R = 10;
+const HUB_R = 9.5;
+const PLANET_R = 7.5;
+const RING_R = 54;
 
-// Exterior view: Juno as a living planet among its IBC neighbours.
+// Home view: the included Cosmos chains as planets. The hub sits at the centre,
+// the other chains ring it. No chain data is loaded here — click a planet to enter it.
 export class Space {
-  constructor() {
+  constructor(chains) {
     this.scene = new THREE.Scene();
     this.pickables = [];
-    this.ships = [];
-    this.neighbors = new Map();
-    this.pulse = 0;
+    this.planets = new Map();
+    this.hover = null;
+    this.time = { value: 0 };
     this.buildStars();
-    this.buildPlanet();
-    this.buildSatellites(25);
-    Object.keys(CHAINS).slice(0, 6).forEach((id) => this.getNeighbor(id));
+    const ring = chains.filter((c) => !c.hub);
+    chains.forEach((c) => {
+      if (c.hub) return this.addPlanet(c, new THREE.Vector3(0, 0, 0), HUB_R);
+      const i = ring.indexOf(c);
+      const a = (i / ring.length) * Math.PI * 2 + 0.6;
+      return this.addPlanet(c, new THREE.Vector3(Math.cos(a) * RING_R, (i % 2 ? -1 : 1) * 7, Math.sin(a) * RING_R), PLANET_R);
+    });
+    this.buildLinks();
   }
 
   buildStars() {
@@ -45,7 +52,7 @@ export class Space {
         void main(){
           float n = fbm(vP*2.2) * 0.5 + 0.5;
           float m = fbm(vP*4.0 + 7.0) * 0.5 + 0.5;
-          vec3 c = mix(vec3(0.035,0.03,0.07), vec3(0.24,0.08,0.14), smoothstep(0.5,0.85,n));
+          vec3 c = mix(vec3(0.03,0.03,0.075), vec3(0.17,0.08,0.2), smoothstep(0.5,0.85,n));
           c += vec3(0.05,0.07,0.2) * smoothstep(0.55,0.9,m);
           gl_FragColor = vec4(pow(c, vec3(2.2)),1.0); // authored in display space
         }`,
@@ -53,19 +60,24 @@ export class Space {
     this.scene.add(neb);
   }
 
-  buildPlanet() {
-    this.uniforms = { uTime: { value: 0 }, uPulse: { value: 0 }, uLight: { value: new THREE.Vector3(0.7, 0.35, 0.6).normalize() } };
-    const mat = new THREE.ShaderMaterial({
-      uniforms: this.uniforms,
+  addPlanet(chain, pos, r) {
+    const uniforms = {
+      uTime: this.time, uPulse: { value: 0 }, uColor: { value: srgbVec(chain.color) },
+      uSeed: { value: hash01(chain.key) * 40 }, uLight: { value: new THREE.Vector3(0.7, 0.35, 0.6).normalize() },
+    };
+    const group = new THREE.Group();
+    group.position.copy(pos);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(r, 96, 96), new THREE.ShaderMaterial({
+      uniforms,
       vertexShader: `varying vec3 vObj; varying vec3 vN; varying vec3 vView;
         void main(){ vObj = normalize(position); vN = normalize(mat3(modelMatrix)*normal);
           vec4 wp = modelMatrix*vec4(position,1.0); vView = normalize(cameraPosition - wp.xyz);
           gl_Position = projectionMatrix*viewMatrix*wp; }`,
       fragmentShader: `${NOISE_GLSL}
-        uniform float uTime; uniform float uPulse; uniform vec3 uLight;
+        uniform float uTime; uniform float uPulse; uniform float uSeed; uniform vec3 uLight; uniform vec3 uColor;
         varying vec3 vObj; varying vec3 vN; varying vec3 vView;
         void main(){
-          vec3 p = vObj*2.2;
+          vec3 p = vObj*2.2 + uSeed;
           float land = fbm(p + 3.0);
           float mask = smoothstep(-0.02, 0.12, land);
           // glowing "network" veins: ridged noise
@@ -73,125 +85,61 @@ export class Space {
           float veins = smoothstep(0.55, 1.0, ridge) * mask;
           float cities = smoothstep(0.35, 0.6, noise(p*14.0)) * mask;
           float day = clamp(dot(vN, uLight)*0.8 + 0.35, 0.0, 1.0);
-          vec3 ocean = vec3(0.07,0.04,0.12);
-          vec3 ground = vec3(0.32,0.12,0.17);
+          vec3 ocean = uColor*0.07 + vec3(0.015,0.012,0.05);
+          vec3 ground = uColor*0.3 + vec3(0.03,0.0,0.03);
           vec3 base = mix(ocean, ground, mask) * (0.25 + day);
-          vec3 coral = vec3(0.94,0.51,0.49);
           float flow = 0.6 + 0.4*sin(uTime*1.5 + land*30.0);
-          vec3 glow = coral * (veins*(0.9*flow + uPulse*1.6) + cities*0.25*(1.2-day));
+          vec3 glow = uColor * (veins*(0.9*flow + uPulse*1.2) + cities*0.25*(1.2-day));
           float fres = pow(1.0 - max(dot(vN, vView), 0.0), 2.6);
-          vec3 c = base + glow + coral*fres*(0.55 + uPulse*0.6);
+          vec3 c = base + glow + uColor*fres*(0.55 + uPulse*0.6);
           gl_FragColor = vec4(pow(c, vec3(2.2)), 1.0);
         }`,
-    });
-    this.planet = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R, 96, 96), mat);
-    this.planet.userData = { type: 'planet' };
-    this.scene.add(this.planet);
-    this.pickables.push(this.planet);
+    }));
+    body.userData = { type: 'planet', chain };
+    this.pickables.push(body);
 
-    this.atmo = new THREE.Mesh(new THREE.SphereGeometry(PLANET_R * 1.22, 64, 64), new THREE.ShaderMaterial({
-      uniforms: this.uniforms, side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    const atmo = new THREE.Mesh(new THREE.SphereGeometry(r * 1.22, 64, 64), new THREE.ShaderMaterial({
+      uniforms, side: THREE.BackSide, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
       vertexShader: `varying vec3 vN; varying vec3 vView;
         void main(){ vN = normalize(mat3(modelMatrix)*normal); vec4 wp = modelMatrix*vec4(position,1.0);
           vView = normalize(cameraPosition - wp.xyz); gl_Position = projectionMatrix*viewMatrix*wp; }`,
-      fragmentShader: `uniform float uPulse; varying vec3 vN; varying vec3 vView;
+      fragmentShader: `uniform float uPulse; uniform vec3 uColor; varying vec3 vN; varying vec3 vView;
         void main(){ float f = pow(max(dot(-vN, vView), 0.0), 3.2);
-          gl_FragColor = vec4(pow(vec3(0.94,0.51,0.49), vec3(2.2))*f*(0.9+uPulse*1.2), f); }`,
+          gl_FragColor = vec4(pow(uColor, vec3(2.2))*f*(0.9+uPulse*1.2), f); }`,
     }));
-    this.scene.add(this.atmo);
 
-    // Block shockwave ring
-    this.wave = new THREE.Mesh(
-      new THREE.RingGeometry(0.985, 1, 128),
-      new THREE.MeshBasicMaterial({ color: CORAL, transparent: true, opacity: 0, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending }),
+    const tint = `#${new THREE.Color(chain.color).lerp(new THREE.Color('#ffffff'), 0.7).getHexString()}`;
+    const label = makeLabel(chain.name.toUpperCase(), { height: 2.4, color: tint, weight: 700 });
+    label.position.set(0, r + 3.6, 0);
+    const sub = makeLabel(chain.chainId, { height: 1.3, color: '#b9bfe0', opacity: 0.8 });
+    sub.position.set(0, r + 1.5, 0);
+    group.add(body, atmo, label, sub);
+    this.scene.add(group);
+    this.planets.set(chain.key, { chain, pos, r, body, uniforms, spin: 0.025 + hash01(chain.key, 3) * 0.03 });
+  }
+
+  // Faint IBC lanes: every chain here has open channels to every other.
+  buildLinks() {
+    const pts = [];
+    const all = [...this.planets.values()];
+    all.forEach((a, i) => all.slice(i + 1).forEach((b) => pts.push(a.pos, b.pos)));
+    this.links = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(pts),
+      new THREE.LineBasicMaterial({ color: '#8b93ff', transparent: true, opacity: 0.13, depthWrite: false, blending: THREE.AdditiveBlending }),
     );
-    this.wave.rotation.x = Math.PI / 2 - 0.35;
-    this.scene.add(this.wave);
-
-    this.label = makeLabel('JUNO', { height: 2.2, color: '#ffd9d6', weight: 700 });
-    this.label.position.set(0, PLANET_R + 4.2, 0);
-    this.scene.add(this.label);
+    this.scene.add(this.links);
   }
 
-  buildSatellites(n) {
-    if (this.sats) { this.scene.remove(this.sats); this.sats.geometry.dispose(); }
-    const pos = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      const r = PLANET_R * 1.55 + (i % 3) * 0.5;
-      pos.set([Math.cos(a) * r, Math.sin(a * 3) * 0.3, Math.sin(a) * r], i * 3);
-    }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    this.sats = new THREE.Points(geo, new THREE.PointsMaterial({
-      size: 0.75, map: dotTexture(), color: '#ffe3e0', transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    this.sats.rotation.x = -0.35;
-    this.scene.add(this.sats);
-  }
-
-  setValidators(list) { this.buildSatellites(list.length); }
-
-  getNeighbor(chainId) {
-    if (this.neighbors.has(chainId)) return this.neighbors.get(chainId);
-    const info = chainInfo(chainId);
-    const i = this.neighbors.size;
-    // Spread neighbours on a wide ring with hashed elevation so each chain has a stable home.
-    const a = hash01(chainId) * 0.6 + i * 2.39996;
-    const r = 58 + hash01(chainId, 7) * 30;
-    const pos = new THREE.Vector3(Math.cos(a) * r, (hash01(chainId, 3) - 0.5) * 36, Math.sin(a) * r);
-    const size = 1.6 + hash01(chainId, 11) * 1.6;
-    const g = new THREE.Group();
-    g.position.copy(pos);
-    const body = new THREE.Mesh(
-      new THREE.SphereGeometry(size, 32, 32),
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(info.color).multiplyScalar(0.3) }),
-    );
-    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: dotTexture(), color: info.color, transparent: true, opacity: 0.3, depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
-    halo.scale.setScalar(size * 5);
-    const label = makeLabel(info.name, { height: 1.7, color: '#dbe1ff' });
-    label.position.y = size + 2.2;
-    g.add(body, halo, label);
-    this.scene.add(g);
-    const nb = { pos, size, info, group: g, halo };
-    this.neighbors.set(chainId, nb);
-    return nb;
-  }
-
-  onBlock() {
-    this.pulse = 1;
-    this.wave.scale.setScalar(PLANET_R * 1.02);
-    this.wave.material.opacity = 0.9;
-    tween({
-      dur: 1.6, easing: ease.out,
-      update: (k) => { this.wave.scale.setScalar(PLANET_R * (1.02 + k * 1.3)); this.wave.material.opacity = 0.9 * (1 - k); },
-    });
-  }
-
-  onIbc(ibc, { replay = false } = {}) {
-    const nb = this.getNeighbor(ibc.chainId);
-    const dir = nb.pos.clone().normalize();
-    const surface = dir.clone().multiplyScalar(PLANET_R * 1.02);
-    const mid = surface.clone().lerp(nb.pos, 0.5).add(new THREE.Vector3(0, 10, 0));
-    const pts = ibc.dir === 'out' ? [surface, mid, nb.pos] : [nb.pos, mid, surface];
-    const label = `${ibc.dir === 'out' ? '→' : '←'} ${ibc.chainName}${ibc.amount ? ' · ' + ibc.amount : ''}${replay ? ' · replay' : ''}`;
-    this.ships.push(new Ship(this.scene, new THREE.QuadraticBezierCurve3(...pts), {
-      color: ibc.color, dur: 6, size: 0.8, label, easing: ease.inOut,
-      onDone: () => {
-        tween({ dur: 1.2, update: (k) => { nb.halo.material.opacity = 0.9 - 0.6 * k; } });
-      },
-    }));
-  }
+  planet(key) { return this.planets.get(key); }
+  setHover(key) { this.hover = key; }
 
   update(dt, t) {
-    this.uniforms.uTime.value = t;
-    this.pulse = Math.max(0, this.pulse - dt * 1.3);
-    this.uniforms.uPulse.value = this.pulse;
-    this.planet.rotation.y += dt * 0.035;
-    this.sats.rotation.y -= dt * 0.12;
+    this.time.value = t;
     this.stars.rotation.y += dt * 0.002;
-    this.ships = this.ships.filter((s) => s.update(dt));
+    for (const [key, p] of this.planets) {
+      p.body.rotation.y += dt * p.spin;
+      const u = p.uniforms.uPulse;
+      u.value += ((key === this.hover ? 0.7 : 0) - u.value) * Math.min(1, dt * 6);
+    }
   }
 }

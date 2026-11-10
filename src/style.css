@@ -1,8 +1,9 @@
 :root {
-  --coral: #f0827d;
+  --coral: #8b93ff; /* accent: set per planet from JS */
+  --rgb: 139, 147, 255;
   --ink: #07060d;
   --panel: rgba(14, 10, 22, 0.72);
-  --line: rgba(240, 130, 125, 0.22);
+  --line: rgba(var(--rgb), 0.24);
   --text: #f5eef0;
   --muted: #a99aa8;
   font-family: "Space Grotesk", "Inter", system-ui, sans-serif;
@@ -13,9 +14,9 @@ canvas#scene { position: fixed; inset: 0; width: 100%; height: 100%; display: bl
 button { font: inherit; color: inherit; cursor: pointer; }
 kbd { font: inherit; font-size: 0.72em; opacity: 0.65; border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 6px; }
 
-#veil { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 50%, #ffd2cc 0%, var(--coral) 35%, #3b1220 100%); }
+#veil { position: fixed; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--coral) 40%, white) 0%, var(--coral) 35%, color-mix(in srgb, var(--coral) 25%, black) 100%); }
 
-.glyph { width: 30px; height: 30px; border-radius: 50%; flex: none; background: radial-gradient(circle at 35% 30%, #ffc4bd, var(--coral) 45%, #6b2233 100%); box-shadow: 0 0 18px rgba(240, 130, 125, 0.7); }
+.glyph { width: 30px; height: 30px; border-radius: 50%; flex: none; background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--coral) 45%, white), var(--coral) 45%, color-mix(in srgb, var(--coral) 40%, black) 100%); box-shadow: 0 0 18px rgba(var(--rgb), 0.7); }
 .glyph.big { display: inline-block; width: 72px; height: 72px; animation: beat 2.8s ease-in-out infinite; }
 @keyframes beat { 0%, 100% { transform: scale(1); } 12% { transform: scale(1.12); } 30% { transform: scale(1); } }
 
@@ -41,7 +42,7 @@ kbd { font: inherit; font-size: 0.72em; opacity: 0.65; border: 1px solid current
 #feed h3 span { color: var(--muted); letter-spacing: 0.02em; text-transform: none; }
 #feed-list { list-style: none; margin: 0; padding: 6px; overflow-y: auto; font-size: 12.5px; }
 #feed-list li { display: flex; gap: 8px; align-items: baseline; padding: 4px 8px; border-radius: 8px; animation: slide 0.35s ease-out; min-width: 0; }
-#feed-list li.block { margin-top: 3px; background: rgba(240, 130, 125, 0.09); font-weight: 600; }
+#feed-list li.block { margin-top: 3px; background: rgba(var(--rgb), 0.09); font-weight: 600; }
 #feed-list li.ibc { background: rgba(94, 234, 212, 0.09); }
 #feed-list li .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; transform: translateY(-1px); }
 #feed-list li .main { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
@@ -68,27 +69,33 @@ kbd { font: inherit; font-size: 0.72em; opacity: 0.65; border: 1px solid current
 #consensus { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); text-align: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 16px 8px; backdrop-filter: blur(10px); max-width: calc(100vw - 640px); min-width: 330px; }
 .steps { display: flex; gap: 6px; justify-content: center; }
 .steps span { font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
-.steps span.on { background: var(--coral); color: #1a0a10; border-color: var(--coral); box-shadow: 0 0 16px rgba(240, 130, 125, 0.6); }
-.steps span.done { color: var(--text); border-color: rgba(240, 130, 125, 0.6); }
+.steps span.on { background: var(--coral); color: #1a0a10; border-color: var(--coral); box-shadow: 0 0 16px rgba(var(--rgb), 0.6); }
+.steps span.done { color: var(--text); border-color: rgba(var(--rgb), 0.6); }
 #consensus-caption { margin: 7px 0 0; font-size: 12.5px; color: #d9ccd6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 #dock { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); text-align: center; }
 #dock button { background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 8px 15px; font-size: 13px; backdrop-filter: blur(10px); transition: all 0.15s; }
 #dock button:hover { border-color: var(--coral); }
-#dock button.active { background: rgba(240, 130, 125, 0.22); border-color: var(--coral); }
-button.primary, #dock button.primary { background: var(--coral); color: #1a0a10; border: 0; font-weight: 700; font-size: 15px; padding: 12px 26px; border-radius: 999px; box-shadow: 0 0 34px rgba(240, 130, 125, 0.55); }
+#dock button.active { background: rgba(var(--rgb), 0.22); border-color: var(--coral); }
+button.primary, #dock button.primary { background: var(--coral); color: #1a0a10; border: 0; font-weight: 700; font-size: 15px; padding: 12px 26px; border-radius: 999px; box-shadow: 0 0 34px rgba(var(--rgb), 0.55); }
 button.primary:hover { filter: brightness(1.1); }
 #districts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
 #dock .row { display: flex; gap: 6px; justify-content: center; margin-top: 8px; }
 .hint { color: var(--muted); font-size: 12px; margin: 10px 0 0; }
 
-.mode-space .inside-only, .mode-space #consensus { display: none; }
+.mode-space .inside-only, .mode-space #consensus, .mode-space #stats, .mode-space #feed { display: none; }
+.mode-inside #home-stats { display: none; }
+#home-stats { position: fixed; top: 64px; left: 16px; width: 128px; }
+#planets { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+#planets button { display: inline-flex; align-items: center; gap: 8px; }
+#planets button i { width: 9px; height: 9px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
+#planets button:hover { border-color: var(--c); }
 .mode-inside .space-only { display: none; }
 
 #tooltip { position: fixed; pointer-events: none; background: rgba(10, 7, 16, 0.92); border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; font-size: 12.5px; white-space: nowrap; transform: translate(14px, 14px); z-index: 5; }
 #tooltip small { color: var(--muted); }
 
-#intro { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, rgba(40, 12, 26, 0.55), rgba(5, 4, 10, 0.92)); z-index: 10; transition: opacity 0.8s; padding: 16px; }
+#intro { position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(circle at 50% 40%, rgba(22, 18, 48, 0.55), rgba(5, 4, 10, 0.92)); z-index: 10; transition: opacity 0.8s; padding: 16px; }
 #intro.gone { opacity: 0; pointer-events: none; }
 .intro-card { text-align: center; max-width: 460px; }
 .intro-card h1 { font-size: clamp(36px, 7vw, 56px); margin: 18px 0 8px; letter-spacing: 0.04em; }
@@ -105,7 +112,6 @@ button.primary:hover { filter: brightness(1.1); }
   .stat b { font-size: 14px; }
   /* sit above the dock so navigation is never covered */
   #detail { left: 8px; right: 8px; width: auto; bottom: 132px; max-height: 30vh; padding: 12px 14px; font-size: 12.5px; }
-  .mode-space #detail { bottom: 104px; }
   #dock { width: calc(100vw - 16px); bottom: 10px; }
   #dock button { padding: 7px 11px; font-size: 12px; }
   .steps span { padding: 2px 7px; font-size: 10px; }

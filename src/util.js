@@ -1,6 +1,10 @@
 import * as THREE from 'three';
 
-export const CORAL = new THREE.Color('#f0827d');
+// '#rrggbb' → raw sRGB components, for shaders that author colour in display space.
+export function srgbVec(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return new THREE.Vector3(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
+}
 
 // ---------- text sprites ----------
 export function makeLabel(text, { color = '#ffffff', height = 2, weight = 600, bg = null, opacity = 1 } = {}) {
