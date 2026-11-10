@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Planet Juno — a living 3D view of the Juno blockchain</title>
+  <meta name="description" content="Fly into planet Juno and watch validators, consensus, blocks, transactions, governance and IBC transfers happen live in 3D." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23f0827d'/><circle cx='16' cy='16' r='6' fill='%23160a14'/></svg>" />
+</head>
+<body class="mode-space">
+  <canvas id="scene"></canvas>
+  <div id="veil"></div>
+
+  <header id="brand">
+    <span class="glyph"></span>
+    <div>
+      <strong>PLANET JUNO</strong>
+      <small><span id="chain-id">juno-1</span> · <span id="net-badge" class="badge">connecting…</span></small>
+    </div>
+  </header>
+
+  <section id="stats">
+    <div class="stat"><label>Block height</label><b id="s-height">—</b></div>
+    <div class="stat"><label>Block time</label><b id="s-time">—</b></div>
+    <div class="stat"><label>Txs in block</label><b id="s-txs">—</b></div>
+    <div class="stat"><label>Validators</label><b id="s-vals">—</b></div>
+    <div class="stat"><label>Bonded</label><b id="s-bonded">—</b></div>
+    <div class="stat"><label>Open votes</label><b id="s-gov">—</b></div>
+  </section>
+
+  <aside id="feed">
+    <h3>Live feed <span id="witnessed"></span></h3>
+    <ul id="feed-list"></ul>
+  </aside>
+
+  <aside id="detail" hidden>
+    <button id="detail-close" aria-label="Close">×</button>
+    <div id="detail-body"></div>
+  </aside>
+
+  <section id="consensus">
+    <div class="steps">
+      <span data-step="0">Propose</span>
+      <span data-step="1">Prevote</span>
+      <span data-step="2">Precommit</span>
+      <span data-step="3">Commit</span>
+    </div>
+    <p id="consensus-caption">Waiting for the next block…</p>
+  </section>
+
+  <nav id="dock">
+    <div class="space-only">
+      <button id="enter" class="primary">Enter the planet <kbd>E</kbd></button>
+      <p class="hint">Drag to orbit · scroll to zoom · each pulse is a new block</p>
+    </div>
+    <div class="inside-only">
+      <div id="districts">
+        <button data-view="overview">Overview</button>
+        <button data-view="core">Consensus</button>
+        <button data-view="validators">Validators</button>
+        <button data-view="blocks">Blocks</button>
+        <button data-view="gov">Governance</button>
+        <button data-view="ibc">IBC Port</button>
+      </div>
+      <div class="row">
+        <button id="tour">▶ Guided tour</button>
+        <button id="leave">Leave planet <kbd>Esc</kbd></button>
+      </div>
+    </div>
+  </nav>
+
+  <div id="tooltip" hidden></div>
+
+  <div id="intro">
+    <div class="intro-card">
+      <span class="glyph big"></span>
+      <h1>Planet Juno</h1>
+      <p>A living world in the Cosmos. Every pulse is a block, every tower a validator, every ship an IBC transfer leaving for another chain.</p>
+      <button id="intro-go" class="primary">Begin in orbit</button>
+      <small id="intro-status">Syncing with juno-1…</small>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
