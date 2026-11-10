@@ -18,7 +18,7 @@ export const CHAINS = {
   'osmosis-1': { name: 'Osmosis', color: '#b565f5' },
   'cosmoshub-4': { name: 'Cosmos Hub', color: '#6f7bf7' },
   'stargaze-1': { name: 'Stargaze', color: '#f472b6' },
-  'noble-1': { name: 'Noble', color: '#60a5fa' },
+  'noble-1': { name: 'Noble', color: '#f2c14e' },
   'neutron-1': { name: 'Neutron', color: '#6cc4f5' },
   'akashnet-2': { name: 'Akash', color: '#ff4f5a' },
   'secret-4': { name: 'Secret', color: '#94a3b8' },
@@ -174,6 +174,7 @@ export class ChainFeed {
   }
 
   async loadProposals() {
+    if (this.chain.gov === false) { this.emit('proposals', []); return; } // chain has no gov module
     const d = await this.get('/cosmos/gov/v1/proposals?pagination.reverse=true&pagination.limit=8');
     const list = await Promise.all(d.proposals.map(async (p) => {
       let t = p.final_tally_result || {};
@@ -235,7 +236,7 @@ export class ChainFeed {
 
   async loadIbcHistory() {
     const q = encodeURIComponent("message.action='/ibc.applications.transfer.v1.MsgTransfer'");
-    const d = await this.get(`/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=15`);
+    const d = await this.get(`/cosmos/tx/v1beta1/txs?query=${q}&order_by=ORDER_BY_DESC&pagination.limit=15&limit=15`);
     const rows = (d.tx_responses || []).map((r, i) => ({ r, tx: d.txs[i] }))
       .sort((a, b) => Number(b.r.height) - Number(a.r.height)).slice(0, 12);
     const items = [];
@@ -352,7 +353,7 @@ export class ChainFeed {
       votingEnd: new Date(Date.now() + days * 864e5).toISOString(), expedited: false,
       tally: { yes, no, abstain, veto },
     });
-    this.proposals = [
+    this.proposals = this.chain.gov === false ? [] : [
       mk(104, `Upgrade ${name} to "Callisto"`, 'VOTING_PERIOD', 9.1e6, 1.2e6, 6e5, 1e5, 3),
       mk(103, `Fund the ${name} tooling guild`, 'VOTING_PERIOD', 4.2e6, 3.9e6, 9e5, 4e5, 1),
       mk(102, 'Lower minimum gas price', 'PASSED', 1.5e7, 2e6, 1e6, 0, -4),
@@ -365,7 +366,7 @@ export class ChainFeed {
     let h = simHeight + Math.floor(Math.random() * 1e5);
     const kinds = ['send', 'send', 'wasm', 'wasm', 'wasm', 'reward', 'reward', 'stake', 'gov', 'other'];
     const labels = { send: 'Send', wasm: 'ExecuteContract', reward: 'WithdrawDelegatorReward', stake: 'Delegate', gov: 'Vote', other: 'Exec', ibc: 'Transfer' };
-    const dests = ['juno-1', 'osmosis-1', 'cosmoshub-4', 'neutron-1', 'akashnet-2', 'noble-1', 'stargaze-1'].filter((id) => id !== chainId);
+    const dests = ['juno-1', 'osmosis-1', 'cosmoshub-4', 'neutron-1', 'akashnet-2', 'noble-1'].filter((id) => id !== chainId);
     const rndHash = () => [...Array(64)].map(() => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('');
     const tick = () => {
       h++;

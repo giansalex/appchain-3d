@@ -28,6 +28,12 @@ export const PLANETS = [
     explorer: 'https://ping.pub/akash', simHeight: 29_400_000, simBlockTime: 6.1,
     endpoints: ['https://akash-rest.publicnode.com', 'https://akash-api.polkachu.com', 'https://rest.cosmos.directory/akash'],
   },
+  {
+    // Proof-of-authority chain: a small permissioned validator set, no staking token and no gov module.
+    key: 'noble', chainId: 'noble-1', name: 'Noble', symbol: 'USDC', prefix: 'noble', color: '#f2c14e', poa: true, gov: false,
+    explorer: 'https://ping.pub/noble', simHeight: 63_600_000, simBlockTime: 1.2,
+    endpoints: ['https://noble-api.polkachu.com', 'https://rest.lavenderfive.com/noble', 'https://rest.cosmos.directory/noble'],
+  },
 ];
 
 export const planetByKey = (key) => PLANETS.find((p) => p.key === key) || null;

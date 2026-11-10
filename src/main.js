@@ -155,12 +155,14 @@ function leavePlanet() {
 }
 
 // ---------- districts ----------
-const districtInfo = ({ name, symbol }) => ({
+const districtInfo = ({ name, symbol, poa, gov }) => ({
   overview: [`Inside ${name}`, 'You are inside the planet. The core at the centre runs consensus; validators ring it as towers; committed blocks spiral upward; proposals float in the Governance Hall and IBC ships launch from the Spaceport.'],
   core: ['Consensus Core', `${name} uses CometBFT. Each height a proposer broadcasts a block, validators prevote, then precommit. When more than ⅔ of voting power precommits, the block is final — the core fires and a new block is born. No forks, instant finality.`],
-  validators: ['Validator Ring', `Each tower is a bonded validator; height reflects voting power (staked ${symbol}). A golden beam marks the proposer of the block. Sparks flying to the core are commit signatures; a tower that glows red missed the last commit.`],
+  validators: ['Validator Ring', `${poa ? `${name} is a proof-of-authority chain: a small permissioned set of validators with equal voting power, and no staking token.` : `Each tower is a bonded validator; height reflects voting power (staked ${symbol}).`} A golden beam marks the proposer of the block. Sparks flying to the core are commit signatures; a tower that glows red missed the last commit.`],
   blocks: ['Block Helix', 'Every committed block joins the helix, newest at the bottom. Bigger, brighter cubes carry more transactions. Coloured sparks streaming into the core are the block\'s transactions leaving the mempool.'],
-  gov: ['Governance Hall', `${symbol} stakers govern the chain. Each hologram is an on-chain proposal with its live tally. Pulsing frames are open for voting right now.`],
+  gov: ['Governance Hall', gov === false
+    ? `${name} has no on-chain governance module, so this hall is empty. Upgrades and parameters are decided by its authority rather than by token-holder votes.`
+    : `${symbol} stakers govern the chain. Each hologram is an on-chain proposal with its live tally. Pulsing frames are open for voting right now.`],
   ibc: ['IBC Spaceport', `The Inter-Blockchain Communication protocol links ${name} with the rest of the Cosmos. Each ship is a token transfer: outbound ships climb through the gate rings and leave the planet; inbound ships land on the pad.`],
 });
 
@@ -208,7 +210,7 @@ function showValidator(v) {
     v.details ? el('p', {}, v.details.slice(0, 220)) : null,
     dl([
       ['Voting power', `${(v.power * 100).toFixed(2)}%`],
-      ['Staked', `${fmt(v.tokens)} ${current.symbol}`],
+      !current.poa && ['Staked', `${fmt(v.tokens)} ${current.symbol}`],
       ['Commission', `${(v.commission * 100).toFixed(1)}%`],
       site && ['Website', link(site, new URL(site).hostname)],
     ]),
@@ -389,12 +391,12 @@ function startFeed(chain) {
   feed.on('validators', (list) => {
     interior.setValidators(list);
     setStat('#s-vals', String(list.length));
-    setStat('#s-bonded', `${compact(feed.bonded)} ${chain.symbol}`);
+    setStat('#s-bonded', chain.poa ? 'PoA' : `${compact(feed.bonded)} ${chain.symbol}`);
   });
 
   feed.on('proposals', (list) => {
     interior.setProposals(list);
-    setStat('#s-gov', String(list.filter((p) => p.status === 'VOTING_PERIOD').length));
+    setStat('#s-gov', chain.gov === false ? 'n/a' : String(list.filter((p) => p.status === 'VOTING_PERIOD').length));
   });
 
   feed.on('block', (b) => {

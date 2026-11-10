@@ -2,15 +2,15 @@
 
 A living 3D view of the Cosmos ecosystem. Every chain is a planet: pick one, fly inside and watch it work in real time.
 
-Included chains: **Juno** (`juno-1`), **Cosmos Hub** (`cosmoshub-4`), **Osmosis** (`osmosis-1`), **Neutron** (`neutron-1`) and **Akash** (`akashnet-2`).
+Included chains: **Juno** (`juno-1`), **Cosmos Hub** (`cosmoshub-4`), **Osmosis** (`osmosis-1`), **Neutron** (`neutron-1`), **Akash** (`akashnet-2`) and **Noble** (`noble-1`).
 
 ## What you see
 
 **Home (in space)**
 
-- The five planets, with the Cosmos Hub at the centre and faint IBC lanes between them.
+- The six planets, with the Cosmos Hub at the centre and faint IBC lanes between them.
 - No chain data is loaded here; the HUD only shows how many chains are included.
-- Click a planet (or its button in the dock, or keys `1`–`5`) to fly inside.
+- Click a planet (or its button in the dock, or keys `1`–`6`) to fly inside.
 
 **Inside a planet** (the same districts on every chain, themed in the chain's colour)
 
@@ -39,6 +39,7 @@ Notes on accuracy:
 - A block is only known once it is committed, so the consensus round is **replayed** as each block arrives. Proposer and signatures are real; the signatures shown are the block's `last_commit` (the votes that finalised the previous height).
 - IBC transfers can be minutes or hours apart on quieter chains. When the port is quiet, real recent transfers are replayed and labelled `replay`.
 - Chains that inject non-transaction data into blocks (Neutron's oracle vote extensions) have those entries skipped, so "Txs in block" counts real transactions only.
+- Noble is a proof-of-authority chain with no staking token or governance module: its 7 validators have equal power, "Bonded" shows `PoA`, "Open votes" shows `n/a` and the Governance Hall is empty.
 - If no endpoint is reachable the app switches to a clearly badged **SIMULATED** chain. Force it with `?sim`.
 
 ## Run
@@ -53,7 +54,7 @@ npm run build    # static site in dist/ (relative paths, host anywhere)
 
 `.github/workflows/deploy-pages.yml` builds the site and publishes `dist/` to GitHub Pages on every push to `master` (or manually from the Actions tab). One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**. The site is then served at https://giansalex.github.io/appchain-3d/.
 
-URL flags: `?sim` (simulated chains), `?enter=<chain>` (skip the intro and fly straight into `juno`, `cosmoshub`, `osmosis`, `neutron` or `akash`).
+URL flags: `?sim` (simulated chains), `?enter=<chain>` (skip the intro and fly straight into `juno`, `cosmoshub`, `osmosis`, `neutron`, `akash` or `noble`).
 
 ## Stack
 
