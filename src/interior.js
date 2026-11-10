@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CORAL, Flyers, NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, tween } from './util.js';
+import { Flyers, NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec, tween } from './util.js';
 import { KINDS } from './data.js';
 
 const CORE = new THREE.Vector3(0, 0, 0);
@@ -29,8 +29,14 @@ export const statusStyle = (s) => STATUS_STYLE[s] || { label: s, color: '#cbd5e1
 
 // The world inside the planet: consensus core, validator ring, block helix,
 // mempool swirl, governance hall and the IBC spaceport.
+// One Interior is built per visit, themed with the chain's colour, and disposed on exit.
 export class Interior {
-  constructor() {
+  constructor(chain) {
+    this.chain = chain;
+    const white = new THREE.Color('#ffffff');
+    this.accent = new THREE.Color(chain.color);
+    this.accentLight = this.accent.clone().lerp(white, 0.4);
+    this.labelColor = `#${new THREE.Color(chain.color).lerp(white, 0.72).getHexString()}`;
     this.scene = new THREE.Scene();
     this.pickables = [];
     this.validators = [];
@@ -43,7 +49,7 @@ export class Interior {
     this.govPanels = [];
 
     this.scene.add(new THREE.AmbientLight('#8a6f8f', 0.9));
-    this.coreLight = new THREE.PointLight('#ff9b94', 260, 400, 1.6);
+    this.coreLight = new THREE.PointLight(this.accentLight, 260, 400, 1.6);
     this.scene.add(this.coreLight);
 
     this.buildShell();
@@ -62,12 +68,12 @@ export class Interior {
 
   // ---------- environment ----------
   buildShell() {
-    this.shellU = { uTime: { value: 0 }, uPulse: { value: 0 } };
+    this.shellU = { uTime: { value: 0 }, uPulse: { value: 0 }, uAccent: { value: srgbVec(this.chain.color) } };
     const shell = new THREE.Mesh(new THREE.SphereGeometry(SHELL_R, 64, 64), new THREE.ShaderMaterial({
       side: THREE.BackSide, uniforms: this.shellU, depthWrite: false,
       vertexShader: 'varying vec3 vP; void main(){ vP=normalize(position); gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
       fragmentShader: `${NOISE_GLSL}
-        uniform float uTime; uniform float uPulse; varying vec3 vP;
+        uniform float uTime; uniform float uPulse; uniform vec3 uAccent; varying vec3 vP;
         float hex(vec2 p){ p.x *= 0.57735*2.0; p.y += mod(floor(p.x), 2.0)*0.5; p = abs(fract(p)-0.5);
           return abs(max(p.x*1.5 + p.y, p.y*2.0) - 1.0); }
         void main(){
@@ -76,11 +82,11 @@ export class Interior {
           float poles = smoothstep(1.35, 0.9, abs(lat));
           float line = smoothstep(0.05, 0.0, hex(uv)) * poles;
           float n = fbm(vP*3.0 + vec3(0.0, uTime*0.03, 0.0))*0.5+0.5;
-          vec3 deep = mix(vec3(0.04,0.025,0.08), vec3(0.2,0.07,0.14), smoothstep(-0.9,0.9,vP.y));
-          vec3 c = deep + vec3(0.2,0.06,0.1)*smoothstep(0.5,0.9,n)*0.5;
+          vec3 deep = mix(vec3(0.04,0.025,0.08), uAccent*0.2 + vec3(0.0,0.0,0.03), smoothstep(-0.9,0.9,vP.y));
+          vec3 c = deep + uAccent*0.2*smoothstep(0.5,0.9,n)*0.5;
           // a wave of light sweeps up the shell with each committed block
           float wave = smoothstep(0.12, 0.0, abs(vP.y - (uPulse*2.2 - 1.1)));
-          c += vec3(0.94,0.51,0.49) * line * (0.22 + 0.3*n + wave*0.9);
+          c += uAccent * line * (0.22 + 0.3*n + wave*0.9);
           gl_FragColor = vec4(pow(c, vec3(2.2)), 1.0); // authored in display space
         }`,
     }));
@@ -96,22 +102,22 @@ export class Interior {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     this.dust = new THREE.Points(geo, new THREE.PointsMaterial({
-      size: 1.4, map: dotTexture(), color: '#ffb7b0', transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending,
+      size: 1.4, map: dotTexture(), color: this.accentLight, transparent: true, opacity: 0.5, depthWrite: false, blending: THREE.AdditiveBlending,
     }));
     this.scene.add(this.dust);
   }
 
   buildCore() {
     this.core = new THREE.Group();
-    this.coreBall = new THREE.Mesh(new THREE.IcosahedronGeometry(4.2, 3), new THREE.MeshBasicMaterial({ color: '#ffb1a8' }));
+    this.coreBall = new THREE.Mesh(new THREE.IcosahedronGeometry(4.2, 3), new THREE.MeshBasicMaterial({ color: this.accentLight }));
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: dotTexture(), color: CORAL, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending,
+      map: dotTexture(), color: this.accent, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending,
     }));
     glow.scale.setScalar(34);
     this.coreGlow = glow;
     this.cage = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(7.5, 1)),
-      new THREE.LineBasicMaterial({ color: CORAL, transparent: true, opacity: 0.7 }),
+      new THREE.LineBasicMaterial({ color: this.accent, transparent: true, opacity: 0.7 }),
     );
     this.core.add(this.coreBall, glow, this.cage);
 
@@ -119,7 +125,7 @@ export class Interior {
     this.rings = [10.5, 12.6, 14.7].map((r, i) => {
       const ring = new THREE.Mesh(
         new THREE.TorusGeometry(r, 0.16, 8, 120),
-        new THREE.MeshBasicMaterial({ color: CORAL, transparent: true, opacity: 0.25 }),
+        new THREE.MeshBasicMaterial({ color: this.accent, transparent: true, opacity: 0.25 }),
       );
       ring.rotation.set(Math.PI / 2 + (i - 1) * 0.5, i * 0.7, 0);
       this.core.add(ring);
@@ -130,13 +136,13 @@ export class Interior {
     this.pickables.push(this.coreBall);
     this.scene.add(this.core);
 
-    const lbl = makeLabel('CONSENSUS CORE', { height: 1.5, color: '#ffd9d6', opacity: 0.85 });
+    const lbl = makeLabel('CONSENSUS CORE', { height: 1.5, color: this.labelColor, opacity: 0.85 });
     lbl.position.set(0, -11, 0);
     this.scene.add(lbl);
   }
 
   buildFloor() {
-    const grid = new THREE.PolarGridHelper(74, 24, 6, 96, '#f0827d', '#5b2a3a');
+    const grid = new THREE.PolarGridHelper(74, 24, 6, 96, this.accent, this.accent.clone().multiplyScalar(0.35));
     grid.position.y = FLOOR_Y;
     grid.material.transparent = true;
     grid.material.opacity = 0.28;
@@ -150,7 +156,7 @@ export class Interior {
     this.scene.add(disc);
     this.valGroup = new THREE.Group();
     this.scene.add(this.valGroup);
-    const lbl = makeLabel('VALIDATOR RING', { height: 1.8, color: '#ffd9d6', opacity: 0.8 });
+    const lbl = makeLabel('VALIDATOR RING', { height: 1.8, color: this.labelColor, opacity: 0.8 });
     lbl.position.set(0, FLOOR_Y + 1.5, 70);
     this.scene.add(lbl);
   }
@@ -183,12 +189,12 @@ export class Interior {
     this.scene.add(this.chain);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((MAX_BLOCKS + 2) * 3), 3));
-    this.chainLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: CORAL, transparent: true, opacity: 0.55 }));
+    this.chainLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: this.accent, transparent: true, opacity: 0.55 }));
     this.chainLine.frustumCulled = false;
     this.chain.add(this.chainLine);
     this.blockGeo = new THREE.BoxGeometry(1, 1, 1);
     this.blockEdges = new THREE.EdgesGeometry(this.blockGeo);
-    const lbl = makeLabel('BLOCK HELIX', { height: 1.8, color: '#ffd9d6', opacity: 0.8 });
+    const lbl = makeLabel('BLOCK HELIX', { height: 1.8, color: this.labelColor, opacity: 0.8 });
     lbl.position.set(0, 20 + MAX_BLOCKS * 3.3, 0);
     this.scene.add(lbl);
   }
@@ -265,6 +271,7 @@ export class Interior {
     this.valGroup.clear();
 
     const max = list[0]?.power || 1;
+    const baseHue = this.accent.getHSL({}).h;
     let ring = 0, placed = 0;
     while (placed < list.length) {
       const R = 34 + ring * 13;
@@ -275,7 +282,7 @@ export class Interior {
         const h = 5 + 30 * Math.pow(v.power / max, 0.6);
         const geo = new THREE.CylinderGeometry(2.1, 2.6, h, 6);
         geo.translate(0, h / 2, 0);
-        const hue = 0.01 + 0.07 * (placed + k) / Math.max(1, list.length); // coral → amber by rank
+        const hue = (baseHue + 0.07 * (placed + k) / Math.max(1, list.length)) % 1; // hue drifts with rank
         const mat = new THREE.MeshStandardMaterial({
           color: '#241018', emissive: new THREE.Color().setHSL(hue, 0.85, 0.5), emissiveIntensity: 0.2, metalness: 0.5, roughness: 0.35,
         });
@@ -286,7 +293,7 @@ export class Interior {
         pillar.userData = { type: 'validator', v, h, flash: 0, bad: 0, top: pillar.position.clone().add(new THREE.Vector3(0, h + 0.6, 0)) };
         if (list.length <= 60 || placed + k < 30) {
           const name = v.moniker.length > 18 ? v.moniker.slice(0, 17) + '…' : v.moniker;
-          const lbl = makeLabel(name, { height: 1.15, color: '#ffe9e6', opacity: 0.9 });
+          const lbl = makeLabel(name, { height: 1.15, color: this.labelColor, opacity: 0.9 });
           lbl.position.set(0, h + 2, 0);
           pillar.add(lbl);
           pillar.userData.label = lbl;
@@ -383,13 +390,13 @@ export class Interior {
     const n = b.txs.length;
     const size = 2.3 + Math.min(2.2, Math.sqrt(n) * 0.55);
     const mat = new THREE.MeshStandardMaterial({
-      color: '#2b1119', emissive: n ? CORAL : new THREE.Color('#7a4a58'), emissiveIntensity: n ? 0.6 : 0.3,
+      color: '#2b1119', emissive: n ? this.accent : this.accent.clone().multiplyScalar(0.4), emissiveIntensity: n ? 0.6 : 0.3,
       metalness: 0.3, roughness: 0.4, transparent: true, opacity: 0.92,
     });
     const mesh = new THREE.Mesh(this.blockGeo, mat);
     mesh.scale.setScalar(0.01);
-    mesh.add(new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: '#ffd9d6' })));
-    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: '#ffe9e6' });
+    mesh.add(new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: this.labelColor })));
+    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: this.labelColor });
     lbl.scale.multiplyScalar(1 / size); // keep label size independent of block scale
     lbl.position.set(0, 0.5 + 1.1 / size, 0);
     lbl.center.set(0.5, 0);
@@ -435,6 +442,17 @@ export class Interior {
     s.position.copy(p);
     this.scene.add(s);
     tween({ dur: 0.9, easing: ease.out, update: (k) => { s.scale.setScalar(size * (0.3 + k)); s.material.opacity = 1 - k; }, done: () => { this.scene.remove(s); s.material.dispose(); } });
+  }
+
+  // Free GPU resources when the visitor leaves the planet (the dot texture is shared, keep it).
+  dispose() {
+    const shared = dotTexture();
+    this.scene.traverse((o) => {
+      o.geometry?.dispose();
+      const m = o.material;
+      if (m) { if (m.map && m.map !== shared) m.map.dispose(); m.dispose(); }
+    });
+    this.queue = [];
   }
 
   // ---------- frame ----------

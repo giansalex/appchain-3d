@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Planet Juno — a living 3D view of the Juno blockchain</title>
-  <meta name="description" content="Fly into planet Juno and watch validators, consensus, blocks, transactions, governance and IBC transfers happen live in 3D." />
+  <title>Cosmos Space — fly into live Cosmos blockchains in 3D</title>
+  <meta name="description" content="Juno, Cosmos Hub, Osmosis, Neutron and Akash as planets. Fly into any of them and watch validators, consensus, blocks, transactions, governance and IBC transfers happen live in 3D." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%23f0827d'/><circle cx='16' cy='16' r='6' fill='%23160a14'/></svg>" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='13' fill='%238b93ff'/><circle cx='16' cy='16' r='6' fill='%23160a14'/></svg>" />
 </head>
 <body class="mode-space">
   <canvas id="scene"></canvas>
@@ -17,10 +17,15 @@
   <header id="brand">
     <span class="glyph"></span>
     <div>
-      <strong>PLANET JUNO</strong>
-      <small><span id="chain-id">juno-1</span> · <span id="net-badge" class="badge">connecting…</span></small>
+      <strong id="brand-title">COSMOS SPACE</strong>
+      <small class="space-only">The interchain, one planet per chain</small>
+      <small class="inside-only"><span id="chain-id"></span> · <span id="net-badge" class="badge">connecting…</span></small>
     </div>
   </header>
+
+  <section id="home-stats">
+    <div class="stat"><label>Chains</label><b id="s-chains">—</b></div>
+  </section>
 
   <section id="stats">
     <div class="stat"><label>Block height</label><b id="s-height">—</b></div>
@@ -53,8 +58,8 @@
 
   <nav id="dock">
     <div class="space-only">
-      <button id="enter" class="primary">Enter the planet <kbd>E</kbd></button>
-      <p class="hint">Drag to orbit · scroll to zoom · each pulse is a new block</p>
+      <div id="planets"></div>
+      <p class="hint">Click a planet to fly inside · drag to orbit · scroll to zoom</p>
     </div>
     <div class="inside-only">
       <div id="districts">
@@ -77,10 +82,10 @@
   <div id="intro">
     <div class="intro-card">
       <span class="glyph big"></span>
-      <h1>Planet Juno</h1>
-      <p>A living world in the Cosmos. Every pulse is a block, every tower a validator, every ship an IBC transfer leaving for another chain.</p>
-      <button id="intro-go" class="primary">Begin in orbit</button>
-      <small id="intro-status">Syncing with juno-1…</small>
+      <h1>Cosmos Space</h1>
+      <p>Every chain is a living planet. Fly inside one to watch its consensus, validators, blocks, governance and IBC transfers happen live.</p>
+      <button id="intro-go" class="primary">Explore the Cosmos</button>
+      <small id="intro-status"></small>
     </div>
   </div>
 

@@ -1,29 +1,26 @@
-// Live Juno data feed (public LCD endpoints) with an offline simulation fallback.
+// Live data feed for one Cosmos chain (public LCD endpoints) with an offline simulation fallback.
 // Emits: status, validators, proposals, block, ibc, ibcHistory
-
-const ENDPOINTS = [
-  'https://juno-rest.publicnode.com',
-  'https://rest.cosmos.directory/juno',
-  'https://juno-api.polkachu.com',
-];
+// A feed only runs while its planet is being visited: start() on entry, stop() on exit.
 
 export const KINDS = {
   send: { label: 'Send', color: '#7dd3fc' },
   stake: { label: 'Staking', color: '#a78bfa' },
   reward: { label: 'Rewards', color: '#fde68a' },
   wasm: { label: 'Contract', color: '#f0827d' },
+  swap: { label: 'Swap', color: '#f9a8d4' },
   gov: { label: 'Gov vote', color: '#86efac' },
   ibc: { label: 'IBC', color: '#5eead4' },
   other: { label: 'Other', color: '#cbd5e1' },
 };
 
 export const CHAINS = {
-  'osmosis-1': { name: 'Osmosis', color: '#a855f7' },
+  'juno-1': { name: 'Juno', color: '#f0827d' },
+  'osmosis-1': { name: 'Osmosis', color: '#b565f5' },
   'cosmoshub-4': { name: 'Cosmos Hub', color: '#6f7bf7' },
   'stargaze-1': { name: 'Stargaze', color: '#f472b6' },
   'noble-1': { name: 'Noble', color: '#60a5fa' },
-  'neutron-1': { name: 'Neutron', color: '#e5e7eb' },
-  'akashnet-2': { name: 'Akash', color: '#ef4444' },
+  'neutron-1': { name: 'Neutron', color: '#6cc4f5' },
+  'akashnet-2': { name: 'Akash', color: '#ff4f5a' },
   'secret-4': { name: 'Secret', color: '#94a3b8' },
   'axelar-dojo-1': { name: 'Axelar', color: '#38bdf8' },
   'kaiyo-1': { name: 'Kujira', color: '#fb7185' },
@@ -44,6 +41,7 @@ export function classify(type = '') {
   if (type.includes('.staking.')) return 'stake';
   if (type.includes('.distribution.')) return 'reward';
   if (type.includes('cosmwasm')) return 'wasm';
+  if (/poolmanager|\.gamm\.|concentratedliquidity|\.dex\./.test(type)) return 'swap';
   if (type.includes('.gov.')) return 'gov';
   return 'other';
 }
@@ -67,9 +65,13 @@ function formatToken(amount, denom = '') {
   return denom.startsWith('ibc/') ? 'IBC asset' : base.slice(0, 14);
 }
 
-export class JunoFeed {
-  constructor({ forceSim = false } = {}) {
+export class ChainFeed {
+  constructor(chain, { forceSim = false } = {}) {
+    this.chain = chain;
+    this.endpoints = chain.endpoints;
     this.listeners = {};
+    this.timers = new Set();
+    this.stopped = false;
     this.forceSim = forceSim;
     this.mode = 'connecting'; // live | sim
     this.ep = 0;
@@ -78,23 +80,37 @@ export class JunoFeed {
     this.byConsAddr = new Map();
     this.proposals = [];
     this.blockTimes = [];
-    this.avgBlockTime = 2.8;
+    this.avgBlockTime = chain.simBlockTime;
     this.lastBlockTime = 0;
     this.channelCache = new Map();
     this.fails = 0;
   }
 
   on(evt, fn) { (this.listeners[evt] ||= []).push(fn); return this; }
-  emit(evt, data) { (this.listeners[evt] || []).forEach((fn) => fn(data)); }
+  emit(evt, data) { if (!this.stopped) (this.listeners[evt] || []).forEach((fn) => fn(data)); }
+
+  // Timers are tracked so stop() can silence the feed when the visitor leaves the planet.
+  after(ms, fn) {
+    const id = setTimeout(() => { this.timers.delete(id); if (!this.stopped) fn(); }, ms);
+    this.timers.add(id);
+  }
+  every(ms, fn) { this.timers.add(setInterval(() => { if (!this.stopped) fn(); }, ms)); }
+  stop() {
+    this.stopped = true;
+    // clearTimeout and clearInterval share one id pool, so either clears both kinds.
+    this.timers.forEach((id) => clearTimeout(id));
+    this.timers.clear();
+    this.listeners = {};
+  }
 
   async get(path) {
     let lastErr;
-    for (let i = 0; i < ENDPOINTS.length; i++) {
-      const idx = (this.ep + i) % ENDPOINTS.length;
+    for (let i = 0; i < this.endpoints.length; i++) {
+      const idx = (this.ep + i) % this.endpoints.length;
       try {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), 9000);
-        const res = await fetch(ENDPOINTS[idx] + path, { signal: ctl.signal });
+        const res = await fetch(this.endpoints[idx] + path, { signal: ctl.signal });
         clearTimeout(timer);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = await res.json();
@@ -109,16 +125,18 @@ export class JunoFeed {
     if (!this.forceSim) {
       try {
         await this.loadValidators();
+        if (this.stopped) return;
         this.mode = 'live';
         this.emit('status', { mode: 'live' });
         this.loadProposals().catch(() => {});
         this.loadIbcHistory().catch(() => {});
-        setInterval(() => this.loadValidators().catch(() => {}), 5 * 60e3);
-        setInterval(() => this.loadProposals().catch(() => {}), 60e3);
+        this.every(5 * 60e3, () => this.loadValidators().catch(() => {}));
+        this.every(60e3, () => this.loadProposals().catch(() => {}));
         this.pollLoop();
         return;
       } catch (e) {
-        console.warn('Juno endpoints unreachable, falling back to simulation', e);
+        if (this.stopped) return;
+        console.warn(`${this.chain.name} endpoints unreachable, falling back to simulation`, e);
       }
     }
     this.mode = 'sim';
@@ -232,6 +250,7 @@ export class JunoFeed {
   }
 
   async pollLoop() {
+    if (this.stopped) return;
     try {
       const latest = await this.get('/cosmos/base/tendermint/v1beta1/blocks/latest');
       const h = Number(latest.block.header.height);
@@ -245,6 +264,7 @@ export class JunoFeed {
               if (n === h) data = { block: latest.block, txs: [], undecoded: true };
             }
           }
+          if (this.stopped) return;
           if (data) await this.handleBlock(data);
         }
         this.height = h;
@@ -254,12 +274,17 @@ export class JunoFeed {
     } catch (e) {
       if (++this.fails === 3) this.emit('status', { mode: 'live', reconnecting: true });
     }
-    setTimeout(() => this.pollLoop(), 1300);
+    this.after(1300, () => this.pollLoop());
   }
 
   async handleBlock({ block, txs, undecoded }) {
     const header = block.header;
-    const raw = block.data?.txs || [];
+    const all = block.data?.txs || [];
+    // Some chains inject non-transaction payloads at the top of each block (e.g. Neutron's oracle
+    // vote extensions). The LCD decoder drops them, so skip them to keep raw bytes and decoded txs aligned.
+    // (A full page of 100 means the gap is pagination, not injected data.)
+    const skip = !undecoded && txs.length < 100 ? Math.max(0, all.length - txs.length) : 0;
+    const raw = all.slice(skip);
     const outTxs = [];
     const ibcs = [];
     for (let i = 0; i < raw.length; i++) {
@@ -308,11 +333,12 @@ export class JunoFeed {
 
   // ---------- simulation ----------
   startSimulation() {
+    const { name, symbol, prefix, chainId, simHeight, simBlockTime } = this.chain;
     const names = ['Nebula Nodes', 'Coral Stake', 'Deep Field', 'Lunar Labs', 'Orbit One', 'Quasar', 'Helios', 'Pulsar Ops',
       'Andromeda', 'StakeWave', 'Kepler', 'Voyager', 'Zenith', 'Photon', 'Aurora', 'Meridian', 'Halo', 'Apogee', 'Sol Guard',
       'Ion Works', 'Parallax', 'Umbra', 'Tidal', 'Perigee', 'Vega'];
     const list = names.map((moniker, i) => ({
-      operator: `junovaloper1sim${i}`, moniker, website: '', details: 'Simulated validator',
+      operator: `${prefix}valoper1sim${i}`, moniker, website: '', details: 'Simulated validator',
       tokens: 2.4e6 * Math.pow(0.9, i) + 2e5, commission: 0.05, index: i,
     }));
     const total = list.reduce((s, v) => s + v.tokens, 0);
@@ -327,8 +353,8 @@ export class JunoFeed {
       tally: { yes, no, abstain, veto },
     });
     this.proposals = [
-      mk(104, 'Upgrade to Juno v30 "Callisto"', 'VOTING_PERIOD', 9.1e6, 1.2e6, 6e5, 1e5, 3),
-      mk(103, 'Fund the CosmWasm tooling guild', 'VOTING_PERIOD', 4.2e6, 3.9e6, 9e5, 4e5, 1),
+      mk(104, `Upgrade ${name} to "Callisto"`, 'VOTING_PERIOD', 9.1e6, 1.2e6, 6e5, 1e5, 3),
+      mk(103, `Fund the ${name} tooling guild`, 'VOTING_PERIOD', 4.2e6, 3.9e6, 9e5, 4e5, 1),
       mk(102, 'Lower minimum gas price', 'PASSED', 1.5e7, 2e6, 1e6, 0, -4),
       mk(101, 'Recover expired IBC client', 'PASSED', 1.8e7, 0, 7e5, 0, -9),
       mk(100, 'Increase validator set to 150', 'REJECTED', 5e6, 1.1e7, 2e6, 9e5, -15),
@@ -336,10 +362,10 @@ export class JunoFeed {
     ];
     this.emit('proposals', this.proposals);
 
-    let h = 43_000_000 + Math.floor(Math.random() * 1e5);
+    let h = simHeight + Math.floor(Math.random() * 1e5);
     const kinds = ['send', 'send', 'wasm', 'wasm', 'wasm', 'reward', 'reward', 'stake', 'gov', 'other'];
     const labels = { send: 'Send', wasm: 'ExecuteContract', reward: 'WithdrawDelegatorReward', stake: 'Delegate', gov: 'Vote', other: 'Exec', ibc: 'Transfer' };
-    const dests = ['osmosis-1', 'cosmoshub-4', 'stargaze-1', 'noble-1', 'neutron-1'];
+    const dests = ['juno-1', 'osmosis-1', 'cosmoshub-4', 'neutron-1', 'akashnet-2', 'noble-1', 'stargaze-1'].filter((id) => id !== chainId);
     const rndHash = () => [...Array(64)].map(() => '0123456789ABCDEF'[Math.floor(Math.random() * 16)]).join('');
     const tick = () => {
       h++;
@@ -355,7 +381,7 @@ export class JunoFeed {
           const chainId = dests[Math.floor(Math.random() * dests.length)];
           ibcs.push({
             dir: Math.random() < 0.7 ? 'out' : 'in', channel: 'channel-sim', chainId, chainName: chainInfo(chainId).name,
-            color: chainInfo(chainId).color, amount: `${(Math.random() * 500).toFixed(1)} JUNO`, hash, height: h,
+            color: chainInfo(chainId).color, amount: `${(Math.random() * 500).toFixed(1)} ${symbol}`, hash, height: h,
           });
         }
       }
@@ -368,8 +394,8 @@ export class JunoFeed {
       this.height = h;
       this.emit('block', { height: h, time, proposer, signers, absent: list.length - signers.size, txs });
       ibcs.forEach((i) => this.emit('ibc', i));
-      setTimeout(tick, 2300 + Math.random() * 900);
+      this.after(simBlockTime * 1000 * (0.85 + Math.random() * 0.3), tick);
     };
-    setTimeout(tick, 800);
+    this.after(800, tick);
   }
 }
