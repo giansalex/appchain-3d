@@ -10,6 +10,9 @@ import { PLANETS, planetByKey } from './chains';
 import { Space } from './space';
 import { Interior, VIEWS, statusStyle, type ViewName } from './interior';
 import { ease, stepTweens, tween, type Easing, type Tween } from './util';
+import { NotFound, fetchAccount, fetchTx, validatorIndex, type AccountDetail, type TxDetail } from './lookup';
+import { formatRoute, parseRoute, type Entity, type Route } from './router';
+import { initSearch } from './search';
 import type { Block, IbcTransfer, Kind, PickData, Planet, Proposal, Validator } from './types';
 
 type Vec3 = [number, number, number];
@@ -34,6 +37,9 @@ function el(tag: string, props: Record<string, string> = {}, ...kids: (Child | C
   kids.flat().forEach((k) => { if (k != null && k !== false) e.append(k); });
   return e;
 }
+/** In-app link: changing the hash is what navigates. */
+const ilink = (route: Route, text: string, title = '') => el('a', title ? { href: formatRoute(route), title } : { href: formatRoute(route) }, text);
+const shortHash = (h: string) => `${h.slice(0, 6)}…${h.slice(-4)}`;
 const link = (href: string, text: string) => el('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
 const safeUrl = (u: string): string | null => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
 
@@ -127,7 +133,7 @@ function enterPlanet(chain: Planet | null): void {
     controls.target.set(0, 16, 0);
     tween({ dur: 1.4, update: (k) => { veil.style.opacity = String(1 - k); } });
     goView('overview', 2.6, ease.out);
-    setTimeout(() => { mode = 'inside'; controls.enabled = true; }, 900);
+    setTimeout(() => { mode = 'inside'; controls.enabled = true; sync(); }, 900);
   });
   tween({ dur: 0.9, delay: 1.0, easing: ease.in, update: (k) => { veil.style.opacity = String(k); } });
 }
@@ -161,7 +167,7 @@ function leavePlanet(): void {
       camera.position.copy(pos).addScaledVector(out, r * 1.4);
       controls.target.copy(pos);
       tween({ dur: 1.2, update: (k) => { veil.style.opacity = String(1 - k); } });
-      flyTo(HOME_POS, [0, 0, 0], 2.4, ease.out, () => { mode = 'space'; controls.enabled = true; });
+      flyTo(HOME_POS, [0, 0, 0], 2.4, ease.out, () => { mode = 'space'; controls.enabled = true; sync(); });
     },
   });
 }
@@ -192,6 +198,7 @@ function stopTour(): void {
   $('#tour').textContent = '▶ Guided tour';
 }
 function startTour(): void {
+  dropEntity();
   const order: ViewName[] = ['core', 'validators', 'blocks', 'gov', 'ibc', 'overview'];
   let i = 0;
   goView(order[0], 2.6);
@@ -237,23 +244,75 @@ function showValidator(v: Validator): void {
   );
 }
 
+const TX_LIST = 25;
+const kindDot = (k: Kind) => el('span', { class: 'dot', style: `display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:${KINDS[k].color}` });
+
 function showBlock(b: Block): void {
   if (!current || !feed) return;
+  const chain = current.key, live = feed.mode === 'live';
   const counts: Partial<Record<Kind, number>> = {};
   b.txs.forEach((t) => { counts[t.kind] = (counts[t.kind] || 0) + 1; });
   openDetail(
     el('span', { class: 'tag' }, 'Block'),
     el('h2', {}, `#${fmt(b.height)}`),
     dl([
-      ['Time', new Date(b.time).toLocaleTimeString()],
-      ['Proposer', b.proposer?.moniker || 'unknown'],
+      ['Time', new Date(b.time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' })],
+      ['Proposer', b.proposer ? ilink({ chain, entity: { kind: 'validator', operator: b.proposer.operator } }, b.proposer.moniker) : 'unknown'],
       ['Transactions', String(b.txs.length)],
       ['Commit signatures', `${b.signers.size}/${feed.validators.length}`],
     ]),
     el('ul', {}, (Object.entries(counts) as [Kind, number][]).map(([k, n]) => el('li', {},
-      el('span', {}, el('span', { class: 'dot', style: `display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:${KINDS[k].color}` }), KINDS[k].label),
+      el('span', {}, kindDot(k), KINDS[k].label),
       el('span', {}, `× ${n}`)))),
-    feed.mode === 'live' ? link(`${current.explorer}/block/${b.height}`, 'Open in explorer ↗') : null,
+    b.txs.length ? el('p', {}, el('strong', {}, 'Transactions')) : null,
+    el('ul', {}, b.txs.slice(0, TX_LIST).map((t) => el('li', {},
+      el('span', {}, kindDot(t.kind), t.label),
+      el('span', { class: 'mono' }, live && t.hash ? ilink({ chain, entity: { kind: 'tx', hash: t.hash } }, shortHash(t.hash)) : t.hash ? shortHash(t.hash) : '')))),
+    b.txs.length > TX_LIST ? el('p', { class: 'mono' }, `+ ${b.txs.length - TX_LIST} more`) : null,
+    live ? el('div', { class: 'pager' },
+      b.height > 1 ? ilink({ chain, entity: { kind: 'block', height: b.height - 1 } }, `‹ #${fmt(b.height - 1)}`) : el('span'),
+      b.height < feed.height ? ilink({ chain, entity: { kind: 'block', height: b.height + 1 } }, `#${fmt(b.height + 1)} ›`) : el('span')) : null,
+    live ? link(`${current.explorer}/block/${b.height}`, 'Open in explorer ↗') : null,
+  );
+}
+
+function showTx(tx: TxDetail): void {
+  if (!current) return;
+  const chain = current.key;
+  const when = new Date(tx.time);
+  openDetail(
+    el('span', { class: 'tag' }, 'Transaction'),
+    el('h2', {}, shortHash(tx.hash)),
+    el('p', { class: 'mono' }, tx.hash),
+    dl([
+      ['Status', el('span', { class: tx.ok ? 'ok' : 'fail' }, tx.ok ? 'Success' : `Failed (code ${tx.code})`)],
+      ['Block', ilink({ chain, entity: { kind: 'block', height: tx.height } }, `#${fmt(tx.height)}`)],
+      !Number.isNaN(when.getTime()) && ['Time', when.toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' })],
+      ['Fee', tx.fee || 'none'],
+      ['Gas', `${fmt(tx.gasUsed)} / ${fmt(tx.gasWanted)}`],
+      tx.memo && ['Memo', tx.memo.slice(0, 160)],
+    ]),
+    tx.log ? el('p', { class: 'fail' }, tx.log.slice(0, 240)) : null,
+    el('p', {}, el('strong', {}, `${tx.msgs.length} message${tx.msgs.length === 1 ? '' : 's'}`)),
+    el('ul', {}, tx.msgs.slice(0, TX_LIST).map((m, i) => el('li', {}, el('span', {}, kindDot(tx.kind), m), el('span', {}, `#${i + 1}`)))),
+    tx.msgs.length > TX_LIST ? el('p', { class: 'mono' }, `+ ${tx.msgs.length - TX_LIST} more`) : null,
+    link(`${current.explorer}/tx/${tx.hash}`, 'Open in explorer ↗'),
+  );
+}
+
+function showAccount(a: AccountDetail): void {
+  if (!current) return;
+  openDetail(
+    el('span', { class: 'tag' }, 'Account'),
+    el('h2', {}, `${a.address.slice(0, 12)}…${a.address.slice(-6)}`),
+    el('p', { class: 'mono' }, a.address),
+    a.staked != null ? dl([['Staked', a.staked], ['Delegations', String(a.delegations)]]) : null,
+    el('p', {}, el('strong', {}, 'Balances')),
+    a.balances.length
+      ? el('ul', {}, a.balances.map((b) => el('li', {}, el('span', {}, b.amount), el('span', {}, b.native ? 'native' : ''))))
+      : el('p', {}, 'This address holds no tokens.'),
+    a.more > 0 ? el('p', { class: 'mono' }, `+ ${a.more} more`) : null,
+    link(`${current.explorer}/account/${a.address}`, 'Open in explorer ↗'),
   );
 }
 
@@ -334,38 +393,41 @@ canvas.addEventListener('pointerup', (e) => {
   if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6 || mode === 'transition') return;
   const u = pick(e);
   if (!u) return;
-  if (u.type === 'planet') enterPlanet(u.chain);
-  else if (u.type === 'validator') showValidator(u.v);
-  else if (u.type === 'block') showBlock(u.b);
-  else if (u.type === 'proposal') showProposal(u.p);
-  else if (u.type === 'core') showInfo('core');
-  else if (u.type === 'port') showPort();
+  // Things with an address get a route (so they can be linked and the back button works); the camera stays put.
+  if (u.type === 'planet') go({ chain: u.chain.key, entity: null });
+  else if (u.type === 'validator') goEntity({ kind: 'validator', operator: u.v.operator });
+  else if (u.type === 'block') goEntity({ kind: 'block', height: u.b.height });
+  else if (u.type === 'proposal') goEntity({ kind: 'proposal', id: u.p.id });
+  else if (u.type === 'core') { dropEntity(); showInfo('core'); }
+  else if (u.type === 'port') { dropEntity(); showPort(); }
 });
 
 // ---------- UI wiring ----------
 const planetNav = $('#planets');
 PLANETS.forEach((c, i) => {
   const b = el('button', { style: `--c:${c.color}`, title: `${c.chainId} — key ${i + 1}` }, el('i'), c.name);
-  b.addEventListener('click', () => enterPlanet(c));
+  b.addEventListener('click', () => go({ chain: c.key, entity: null }));
   b.addEventListener('pointerenter', () => { if (mode === 'space') space.setHover(c.key); });
   b.addEventListener('pointerleave', () => space.setHover(null));
   planetNav.append(b);
 });
 $('#s-chains').textContent = String(PLANETS.length);
 $('#intro-status').textContent = `${PLANETS.length} chains: ${PLANETS.map((c) => c.name).join(' · ')}`;
-$('#leave').addEventListener('click', leavePlanet);
-$('#detail-close').addEventListener('click', closeDetail);
+$('#leave').addEventListener('click', () => go(HOME_ROUTE));
+$('#detail-close').addEventListener('click', dismissDetail);
 $('#tour').addEventListener('click', () => (tourTimer ? stopTour() : startTour()));
 $('#districts').addEventListener('click', (e) => {
   const v = (e.target as HTMLElement).closest('button')?.dataset.view as ViewName | undefined;
-  if (v && mode === 'inside') { stopTour(); goView(v); }
+  if (v && mode === 'inside') { stopTour(); dropEntity(); goView(v); }
 });
 $('#intro-go').addEventListener('click', () => $('#intro').classList.add('gone'));
 window.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (mode === 'space' && PLANETS[Number(e.key) - 1]) enterPlanet(PLANETS[Number(e.key) - 1]);
-  else if (e.key === 'Escape') { if (!detail.hidden) closeDetail(); else leavePlanet(); }
-  else if (mode === 'inside' && /^[1-6]$/.test(e.key)) { stopTour(); goView((Object.keys(VIEWS) as ViewName[])[Number(e.key) - 1]); }
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); search.open(); return; }
+  if (e.metaKey || e.ctrlKey || e.altKey || search.isOpen() || (e.target as HTMLElement).closest?.('input, textarea')) return;
+  if (e.key === '/') { e.preventDefault(); search.open(); }
+  else if (mode === 'space' && PLANETS[Number(e.key) - 1]) go({ chain: PLANETS[Number(e.key) - 1].key, entity: null });
+  else if (e.key === 'Escape') { if (!detail.hidden) dismissDetail(); else if (mode === 'inside') go(HOME_ROUTE); }
+  else if (mode === 'inside' && /^[1-6]$/.test(e.key)) { stopTour(); dropEntity(); goView((Object.keys(VIEWS) as ViewName[])[Number(e.key) - 1]); }
 });
 
 function setStat(id: string, text: string, bump = false): void {
@@ -441,6 +503,7 @@ function resetHud(chain: Planet | null): void {
   caption.textContent = 'Waiting for the next block…';
   stepEls.forEach((e) => e.classList.remove('on', 'done'));
   lastBlock = null; witnessed = 0; lastIbcAt = 0; replayIdx = 0; shownStep = -2;
+  shownKey = null; lookupSeq++;
 }
 
 function startFeed(chain: Planet): void {
@@ -476,14 +539,14 @@ function startFeed(chain: Planet): void {
 
     b.txs.slice(0, 5).reverse().forEach((tx) => {
       const main = el('span', { class: 'main' }, tx.label);
-      const short = tx.hash ? `${tx.hash.slice(0, 6)}…${tx.hash.slice(-4)}` : '';
+      const short = tx.hash ? shortHash(tx.hash) : '';
       pushFeed(el('li', {},
         el('span', { class: 'dot', style: `background:${KINDS[tx.kind].color}` }), main,
-        el('span', { class: 'meta' }, f.mode === 'live' && tx.hash ? link(`${chain.explorer}/tx/${tx.hash}`, short) : short)));
+        el('span', { class: 'meta' }, f.mode === 'live' && tx.hash ? ilink({ chain: chain.key, entity: { kind: 'tx', hash: tx.hash } }, short, 'Transaction details') : short)));
     });
     if (b.txs.length > 5) pushFeed(el('li', {}, el('span', { class: 'main', style: 'color:var(--muted)' }, `+ ${b.txs.length - 5} more transactions`)));
     pushFeed(el('li', { class: 'block' },
-      el('span', { class: 'main' }, `◆ #${fmt(b.height)} · ${b.proposer?.moniker || 'proposer unknown'}`),
+      el('span', { class: 'main' }, ilink({ chain: chain.key, entity: { kind: 'block', height: b.height } }, `◆ #${fmt(b.height)} · ${b.proposer?.moniker || 'proposer unknown'}`, 'Block details')),
       el('span', { class: 'meta' }, `${b.txs.length} tx`)));
   });
 
@@ -533,6 +596,158 @@ function updateConsensus(): void {
   ][step] ?? `Height ${fmt(b.height + 1)} · collecting transactions for the next round…`;
 }
 
+// ---------- routing ----------
+// The URL hash is the source of truth for where the visitor is: which planet, and what is open in the
+// detail panel. UI actions only change the hash (go); applying it (sync) enters/leaves planets and opens things.
+const HOME_ROUTE: Route = { chain: null, entity: null };
+let route: Route = HOME_ROUTE;
+let shownKey: string | null = null; // the entity route currently in the detail panel
+let lookupSeq = 0;                  // bumps whenever the panel is repurposed, so late lookups are dropped
+let flyNext = true;                 // false when the visitor clicked the thing itself and is already looking at it
+
+function go(r: Route): void {
+  const hash = formatRoute(r);
+  if (location.hash === hash) applyRoute(); else location.hash = hash;
+}
+function goEntity(entity: Entity): void {
+  if (!current) return;
+  flyNext = false;
+  go({ chain: current.key, entity });
+}
+
+function applyRoute(): void {
+  route = parseRoute(location.hash);
+  sync();
+}
+window.addEventListener('hashchange', applyRoute);
+
+/** Move towards the route. Enter and leave are animated, so this runs again when each transition ends. */
+function sync(): void {
+  if (mode === 'transition') return;
+  const want = planetByKey(route.chain);
+  if (mode === 'space') { if (want) enterPlanet(want); return; }
+  if (want !== current) { leavePlanet(); return; }
+  void showEntity(route.entity);
+}
+
+/** The detail panel is being used for something without an address (a district): forget the routed entity. */
+function dropEntity(): void {
+  lookupSeq++;
+  shownKey = null;
+  if (route.entity) {
+    route = { chain: route.chain, entity: null };
+    history.replaceState(null, '', formatRoute(route));
+  }
+}
+
+function dismissDetail(): void {
+  closeDetail(); // right away, so a second Esc leaves the planet instead of closing twice
+  if (shownKey && current) go({ chain: current.key, entity: null });
+}
+
+const message = (tag: string, title: string, text: string) =>
+  openDetail(el('span', { class: 'tag' }, tag), el('h2', {}, title), el('p', {}, text));
+
+/** Camera spot for looking at a point from further out along its radius from the core axis. */
+function lookAt(p: THREE.Vector3, back: number, up: number): void {
+  const out = new THREE.Vector3(p.x, 0, p.z);
+  if (out.lengthSq() < 1) out.set(0, 0, 1);
+  out.normalize();
+  flyTo([p.x + out.x * back, p.y + up, p.z + out.z * back], [p.x, p.y, p.z], 1.6);
+}
+
+const ENTITY_TITLE: Record<Entity['kind'], (e: any) => string> = {
+  block: (e) => `Block #${fmt(e.height)}`,
+  tx: (e) => `Transaction ${shortHash(e.hash)}`,
+  validator: () => 'Validator',
+  account: () => 'Account',
+  proposal: (e) => `Proposal #${e.id}`,
+};
+
+async function showEntity(entity: Entity | null): Promise<void> {
+  const chain = current, f = feed, inside = interior;
+  const fly = flyNext;
+  flyNext = true;
+  if (!chain || !f || !inside) return;
+  const key = entity ? formatRoute({ chain: chain.key, entity }) : null;
+  if (key === shownKey) return;
+  shownKey = key;
+  const mine = ++lookupSeq;
+  if (!entity) { closeDetail(); return; }
+  stopTour();
+  const title = ENTITY_TITLE[entity.kind](entity);
+  message('Looking up', title, `Asking ${chain.name}…`);
+  const stale = () => mine !== lookupSeq || feed !== f;
+  try {
+    await f.whenReady(); // validators are needed to name proposers and find towers
+    if (stale()) return;
+    const needsNode = entity.kind === 'tx' || entity.kind === 'account';
+    if (needsNode && f.mode !== 'live') {
+      message('Unavailable', title, `${chain.name} is running as a simulation, so there is no real chain to look this up on.`);
+      return;
+    }
+    switch (entity.kind) {
+      case 'block': {
+        const b = inside.findBlock(entity.height) ?? await f.fetchBlock(entity.height);
+        if (stale()) return;
+        showBlock(b);
+        const at = inside.focusBlock(b.height);
+        if (at && fly) lookAt(at, 26, 5);
+        break;
+      }
+      case 'tx': {
+        const tx = await fetchTx(chain, entity.hash);
+        if (stale()) return;
+        showTx(tx);
+        const at = inside.focusBlock(tx.height);
+        if (at && fly) lookAt(at, 26, 5);
+        break;
+      }
+      case 'validator': {
+        const v = f.validators.find((x) => x.operator === entity.operator);
+        if (!v) throw new NotFound(`No bonded validator with this address on ${chain.name}. It may be jailed, unbonded or from another chain.`);
+        showValidator(v);
+        const top = inside.focusValidator(v.operator);
+        if (top && fly) lookAt(top, 40, 30);
+        break;
+      }
+      case 'account': {
+        const a = await fetchAccount(chain, entity.address);
+        if (stale()) return;
+        showAccount(a);
+        break;
+      }
+      case 'proposal': {
+        const p = await f.fetchProposal(entity.id);
+        if (stale()) return;
+        showProposal(p);
+        if (fly) flyTo(VIEWS.gov.pos, VIEWS.gov.target);
+        break;
+      }
+    }
+  } catch (e) {
+    if (stale()) return;
+    const text = e instanceof NotFound ? e.message
+      : f.mode !== 'live' ? `${chain.name} is running as a simulation; only what you have watched happen can be opened.`
+        : `${chain.name}'s public nodes could not answer. They keep only recent history, so older blocks and transactions may be unavailable.`;
+    message('Not found', title, text);
+  }
+}
+
+const search = initSearch({
+  current: () => current,
+  // The visited chain's validators are already loaded; other chains are fetched once on first use.
+  validators: (chain) => (chain === current && feed ? Promise.resolve(feed.validators)
+    : params.has('sim') ? Promise.resolve([]) : validatorIndex(chain)),
+  go,
+});
+
+// Old links used ?enter=<chain>; turn them into a route.
+if (!location.hash && params.has('enter')) {
+  history.replaceState(null, '', formatRoute({ chain: (planetByKey(params.get('enter')) ?? PLANETS[0]).key, entity: null }));
+}
+const deepLink = !!planetByKey(parseRoute(location.hash).chain);
+
 // ---------- loop ----------
 const clock = new THREE.Clock();
 function frame(): void {
@@ -552,10 +767,9 @@ function frame(): void {
 Promise.race([document.fonts?.load('600 56px "Space Grotesk"') ?? Promise.resolve(), new Promise<void>((r) => { setTimeout(r, 1500); })])
   .finally(() => {
     frame();
-    if (!params.has('enter')) startHomeFeeds();
-    if (params.has('enter')) setTimeout(() => enterPlanet(planetByKey(params.get('enter')) || PLANETS[0]), 600);
+    if (deepLink) setTimeout(applyRoute, 600); else startHomeFeeds();
   });
 
-if (params.has('enter')) $('#intro').classList.add('gone');
+if (deepLink) $('#intro').classList.add('gone');
 // Handy from the console.
-(window as unknown as { __cosmos: unknown }).__cosmos = { space, camera, controls, goView, enterPlanet, leavePlanet, get feed() { return feed; }, get interior() { return interior; }, get mode() { return mode; } };
+(window as unknown as { __cosmos: unknown }).__cosmos = { space, camera, controls, goView, go, search, get feed() { return feed; }, get interior() { return interior; }, get mode() { return mode; } };

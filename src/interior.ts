@@ -462,6 +462,11 @@ export class Interior {
     return pillar.userData.top.clone();
   }
 
+  /** A block still in the helix, by height. */
+  findBlock(height: number): Block | null {
+    return this.blocks.find((m) => m.userData.b.height === height)?.userData.b ?? null;
+  }
+
   /** Light up a block in the helix and return where it is, or null if it has scrolled away (or was never witnessed). */
   focusBlock(height: number): THREE.Vector3 | null {
     const mesh = this.blocks.find((m) => m.userData.b.height === height);

@@ -23,6 +23,34 @@ Included chains: **Juno** (`juno-1`), **Cosmos Hub** (`cosmoshub-4`), **Osmosis*
 | Governance Hall | The latest on-chain proposals as holograms with their tally; pulsing frames are open for voting. |
 | IBC Spaceport | Outbound transfers launch through the gate rings and leave the planet; inbound packets land on the pad. |
 
+## Search and links
+
+Press `/` (or `Ctrl`/`⌘`+`K`, or the **Search** button) anywhere and type:
+
+| You type | You get |
+| --- | --- |
+| A number | That block on any chain (the visited chain first), or the proposal with that id |
+| A 64-character tx hash | The transaction on the visited chain, or found across all chains |
+| An address (`cosmos1…`, `osmo1…`) | The account on the chain that owns the prefix: balances and staked total |
+| A validator name or `…valoper1…` address | The validator; the camera flies to its tower |
+| A chain name | Its planet |
+
+Everything you open has its own URL, so it can be shared and the browser's back/forward buttons work:
+
+```
+#/                                  home
+#/osmosis                           inside a planet
+#/osmosis/block/74756546
+#/osmosis/tx/<HASH>
+#/osmosis/validator/<osmovaloper1…>
+#/osmosis/account/<osmo1…>
+#/osmosis/proposal/<id>
+```
+
+Opening a link to another chain leaves the current planet and flies into the right one. A block that is still in the helix is lit up and the camera flies to it; older blocks are fetched by height. Blocks link to their transactions and proposer, transactions link to their block, and blocks have previous/next links.
+
+Public nodes keep only recent history, so old blocks and transactions can come back "not found". The simulation has no real chain behind it: only validators, proposals and blocks you watched can be opened there.
+
 Hover or click anything (towers, blocks, proposals, the core, the port) for details. Use the dock, keys `1`–`6`, or **Guided tour** to move between districts. `Esc` leaves the planet. The stats panel and live feed are shown only while inside a planet.
 
 ## Data
@@ -31,6 +59,7 @@ Everything is read live from public LCD endpoints (publicnode, Polkachu, cosmos.
 
 - Blocks, decoded transactions, proposer and commit signatures: `/cosmos/tx/v1beta1/txs/block/{height}`
 - Validators: `/cosmos/staking/v1beta1/validators`
+- Transaction by hash: `/cosmos/tx/v1beta1/txs/{hash}`; account: `/cosmos/bank/v1beta1/balances/{address}` and `/cosmos/staking/v1beta1/delegations/{address}`
 - Proposals and tallies: `/cosmos/gov/v1/proposals`
 - IBC destination chains are resolved from each channel's client state.
 
@@ -54,7 +83,7 @@ npm run build    # static site in dist/ (relative paths, host anywhere)
 
 `.github/workflows/deploy-pages.yml` builds the site and publishes `dist/` to GitHub Pages on every push to `master` (or manually from the Actions tab). One-time setup: **Settings → Pages → Build and deployment → Source: GitHub Actions**. The site is then served at https://giansalex.github.io/appchain-3d/.
 
-URL flags: `?sim` (simulated chains), `?enter=<chain>` (skip the intro and fly straight into `juno`, `cosmoshub`, `osmosis`, `neutron`, `akash` or `noble`).
+URL flags: `?sim` (simulated chains). `#/<chain>` skips the intro and flies straight into `juno`, `cosmoshub`, `osmosis`, `neutron`, `akash` or `noble` (the older `?enter=<chain>` still works).
 
 ## Stack
 
@@ -66,8 +95,11 @@ src/chains.ts    the included chains (ids, endpoints, colours) — add a chain h
 src/types.ts     shared data shapes (chain config, validators, blocks, feed events…)
 src/lcd.ts       REST client with endpoint failover, one per chain
 src/data.ts      per-chain live feed + simulation fallback
+src/lookup.ts    one-off lookups: transaction, account, validator index
+src/router.ts    hash routes (parse / format)
+src/search.ts    search palette
 src/space.ts     home scene with all planets
 src/interior.ts  inside-the-planet scene
-src/main.ts      camera, HUD, picking, wiring
+src/main.ts      camera, HUD, picking, routing, wiring
 src/util.ts      labels, tweens, particle pool, ships
 ```
