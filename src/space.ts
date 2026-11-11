@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec } from './util.js';
+import { NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec } from './util';
+import type { Planet } from './types';
 
 const HUB_R = 9.5;
 const PLANET_R = 7.5;
@@ -8,14 +9,26 @@ const MAX_SHIPS = 14;
 
 // Home view: the included Cosmos chains as planets. The hub sits at the centre,
 // the other chains ring it. IBC transfers between them fly as ships; click a planet to enter it.
+export interface PlanetBody {
+  chain: Planet;
+  pos: THREE.Vector3;
+  r: number;
+  body: THREE.Mesh;
+  uniforms: { uPulse: { value: number } };
+  kick: number;
+  spin: number;
+}
+
 export class Space {
-  constructor(chains) {
-    this.scene = new THREE.Scene();
-    this.pickables = [];
-    this.planets = new Map();
-    this.hover = null;
-    this.time = { value: 0 };
-    this.ships = [];
+  readonly scene = new THREE.Scene();
+  readonly pickables: THREE.Object3D[] = [];
+  private planets = new Map<string, PlanetBody>();
+  private hover: string | null = null;
+  private time = { value: 0 };
+  private ships: Ship[] = [];
+  private stars!: THREE.Points;
+
+  constructor(chains: Planet[]) {
     this.buildStars();
     const ring = chains.filter((c) => !c.hub);
     chains.forEach((c) => {
@@ -27,7 +40,7 @@ export class Space {
     this.buildLinks();
   }
 
-  buildStars() {
+  private buildStars(): void {
     const n = 5000;
     const pos = new Float32Array(n * 3);
     const col = new Float32Array(n * 3);
@@ -62,7 +75,7 @@ export class Space {
     this.scene.add(neb);
   }
 
-  addPlanet(chain, pos, r) {
+  private addPlanet(chain: Planet, pos: THREE.Vector3, r: number): void {
     const uniforms = {
       uTime: this.time, uPulse: { value: 0 }, uColor: { value: srgbVec(chain.color) },
       uSeed: { value: hash01(chain.key) * 40 }, uLight: { value: new THREE.Vector3(0.7, 0.35, 0.6).normalize() },
@@ -121,19 +134,18 @@ export class Space {
   }
 
   // Faint IBC lanes: every chain here has open channels to every other.
-  buildLinks() {
-    const pts = [];
+  private buildLinks(): void {
+    const pts: THREE.Vector3[] = [];
     const all = [...this.planets.values()];
     all.forEach((a, i) => all.slice(i + 1).forEach((b) => pts.push(a.pos, b.pos)));
-    this.links = new THREE.LineSegments(
+    this.scene.add(new THREE.LineSegments(
       new THREE.BufferGeometry().setFromPoints(pts),
       new THREE.LineBasicMaterial({ color: '#8b93ff', transparent: true, opacity: 0.13, depthWrite: false, blending: THREE.AdditiveBlending }),
-    );
-    this.scene.add(this.links);
+    ));
   }
 
   // An IBC transfer: a ship leaves one planet, arcs over the lane and lands on the other.
-  launchTransfer(fromKey, toKey, { label = '' } = {}) {
+  launchTransfer(fromKey: string, toKey: string, { label = '' } = {}): boolean {
     const a = this.planets.get(fromKey), b = this.planets.get(toKey);
     if (!a || !b || a === b || this.ships.length >= MAX_SHIPS) return false;
     const dir = b.pos.clone().sub(a.pos);
@@ -154,15 +166,15 @@ export class Space {
     return true;
   }
 
-  clearShips() {
+  clearShips(): void {
     this.ships.forEach((s) => s.dispose());
     this.ships = [];
   }
 
-  planet(key) { return this.planets.get(key); }
-  setHover(key) { this.hover = key; }
+  planet(key: string): PlanetBody | undefined { return this.planets.get(key); }
+  setHover(key: string | null): void { this.hover = key; }
 
-  update(dt, t) {
+  update(dt: number, t: number): void {
     this.time.value = t;
     this.stars.rotation.y += dt * 0.002;
     for (const [key, p] of this.planets) {

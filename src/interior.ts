@@ -1,6 +1,7 @@
 import * as THREE from 'three';
-import { Flyers, NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec, tween } from './util.js';
-import { KINDS } from './data.js';
+import { Flyers, NOISE_GLSL, Ship, dotTexture, ease, hash01, makeLabel, srgbVec, tween } from './util';
+import { KINDS } from './data';
+import type { Block, IbcTransfer, Planet, Proposal, Validator } from './types';
 
 const CORE = new THREE.Vector3(0, 0, 0);
 const FLOOR_Y = -6;
@@ -8,8 +9,11 @@ const PORT = new THREE.Vector3(104, FLOOR_Y, 0);
 const GOV_R = 108;
 const SHELL_R = 420;
 const MAX_BLOCKS = 34;
+const HISTORY_COLOR = '#fde68a'; // blocks shown by time travel are outlined in amber
 
-export const VIEWS = {
+export type ViewName = 'overview' | 'core' | 'validators' | 'blocks' | 'gov' | 'ibc';
+type Vec3 = [number, number, number];
+export const VIEWS: Record<ViewName, { pos: Vec3; target: Vec3 }> = {
   overview: { pos: [0, 78, 205], target: [0, 16, 0] },
   core: { pos: [30, 12, 38], target: [0, 3, 0] },
   validators: { pos: [0, 46, 92], target: [0, 4, 0] },
@@ -18,35 +22,72 @@ export const VIEWS = {
   ibc: { pos: [168, 26, 78], target: [104, 34, 0] },
 };
 
-const STATUS_STYLE = {
+const STATUS_STYLE: Record<string, { label: string; color: string }> = {
   VOTING_PERIOD: { label: 'VOTING', color: '#f0827d' },
   PASSED: { label: 'PASSED', color: '#86efac' },
   REJECTED: { label: 'REJECTED', color: '#f87171' },
   FAILED: { label: 'FAILED', color: '#f87171' },
   DEPOSIT_PERIOD: { label: 'DEPOSIT', color: '#fde68a' },
 };
-export const statusStyle = (s) => STATUS_STYLE[s] || { label: s, color: '#cbd5e1' };
+export const statusStyle = (s: string): { label: string; color: string } => STATUS_STYLE[s] || { label: s, color: '#cbd5e1' };
 
 // The world inside the planet: consensus core, validator ring, block helix,
 // mempool swirl, governance hall and the IBC spaceport.
 // One Interior is built per visit, themed with the chain's colour, and disposed on exit.
+type Pillar = THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
+type BlockMesh = THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>;
+type Ring = THREE.Mesh<THREE.TorusGeometry, THREE.MeshBasicMaterial>;
+interface GovPanel {
+  group: THREE.Group;
+  frame: THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>;
+  tex: THREE.CanvasTexture;
+  voting: boolean;
+  baseY: number;
+  phase: number;
+}
+
 export class Interior {
-  constructor(chain) {
-    this.chain = chain;
+  readonly scene = new THREE.Scene();
+  pickables: THREE.Object3D[] = [];
+
+  private accent: THREE.Color;
+  private accentLight: THREE.Color;
+  private labelColor: string;
+  private validators: Pillar[] = [];
+  private blocks: BlockMesh[] = [];
+  private recent: Block[] = [];   // the live blocks, newest first: what the helix returns to after time travel
+  private history = false;        // the helix is showing fetched history instead of the live head
+  private helixLabel!: THREE.Sprite;
+  private historyLabel!: THREE.Sprite;
+  private ships: Ship[] = [];
+  private queue: { at: number; fn: () => void }[] = [];
+  private time = 0;
+  private step = 0;
+  private corePulse = 0;
+  private govPanels: GovPanel[] = [];
+  private coreLight: THREE.PointLight;
+  private flyers: Flyers;
+  private shellU!: { uTime: { value: number }; uPulse: { value: number }; uAccent: { value: THREE.Vector3 } };
+  private dust!: THREE.Points;
+  private coreBall!: THREE.Mesh;
+  private coreGlow!: THREE.Sprite;
+  private cage!: THREE.LineSegments;
+  private rings!: Ring[];
+  private valGroup!: THREE.Group;
+  private mem!: { n: number; a: Float32Array; r: Float32Array; y: Float32Array; s: Float32Array };
+  private memPoints!: THREE.Points;
+  private helixGroup!: THREE.Group;
+  private chainLine!: THREE.Line;
+  private blockGeo!: THREE.BoxGeometry;
+  private blockEdges!: THREE.EdgesGeometry;
+  private gates!: Ring[];
+  private gov!: THREE.Group;
+
+  constructor(private chain: Planet) {
     const white = new THREE.Color('#ffffff');
     this.accent = new THREE.Color(chain.color);
     this.accentLight = this.accent.clone().lerp(white, 0.4);
     this.labelColor = `#${new THREE.Color(chain.color).lerp(white, 0.72).getHexString()}`;
-    this.scene = new THREE.Scene();
-    this.pickables = [];
-    this.validators = [];
-    this.blocks = [];
-    this.ships = [];
-    this.queue = [];
-    this.time = 0;
-    this.step = 0;
-    this.corePulse = 0;
-    this.govPanels = [];
 
     this.scene.add(new THREE.AmbientLight('#8a6f8f', 0.9));
     this.coreLight = new THREE.PointLight(this.accentLight, 260, 400, 1.6);
@@ -64,10 +105,10 @@ export class Interior {
     this.scene.add(this.flyers.points);
   }
 
-  later(delay, fn) { this.queue.push({ at: this.time + delay, fn }); }
+  private later(delay: number, fn: () => void): void { this.queue.push({ at: this.time + delay, fn }); }
 
   // ---------- environment ----------
-  buildShell() {
+  private buildShell(): void {
     this.shellU = { uTime: { value: 0 }, uPulse: { value: 0 }, uAccent: { value: srgbVec(this.chain.color) } };
     const shell = new THREE.Mesh(new THREE.SphereGeometry(SHELL_R, 64, 64), new THREE.ShaderMaterial({
       side: THREE.BackSide, uniforms: this.shellU, depthWrite: false,
@@ -107,8 +148,8 @@ export class Interior {
     this.scene.add(this.dust);
   }
 
-  buildCore() {
-    this.core = new THREE.Group();
+  private buildCore(): void {
+    const core = new THREE.Group();
     this.coreBall = new THREE.Mesh(new THREE.IcosahedronGeometry(4.2, 3), new THREE.MeshBasicMaterial({ color: this.accentLight }));
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({
       map: dotTexture(), color: this.accent, transparent: true, opacity: 0.8, depthWrite: false, blending: THREE.AdditiveBlending,
@@ -119,7 +160,7 @@ export class Interior {
       new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(7.5, 1)),
       new THREE.LineBasicMaterial({ color: this.accent, transparent: true, opacity: 0.7 }),
     );
-    this.core.add(this.coreBall, glow, this.cage);
+    core.add(this.coreBall, glow, this.cage);
 
     // Three consensus rings: propose, prevote, precommit
     this.rings = [10.5, 12.6, 14.7].map((r, i) => {
@@ -128,24 +169,24 @@ export class Interior {
         new THREE.MeshBasicMaterial({ color: this.accent, transparent: true, opacity: 0.25 }),
       );
       ring.rotation.set(Math.PI / 2 + (i - 1) * 0.5, i * 0.7, 0);
-      this.core.add(ring);
+      core.add(ring);
       return ring;
     });
-    this.core.userData = { type: 'core' };
     this.coreBall.userData = { type: 'core' };
     this.pickables.push(this.coreBall);
-    this.scene.add(this.core);
+    this.scene.add(core);
 
     const lbl = makeLabel('CONSENSUS CORE', { height: 1.5, color: this.labelColor, opacity: 0.85 });
     lbl.position.set(0, -11, 0);
     this.scene.add(lbl);
   }
 
-  buildFloor() {
+  private buildFloor(): void {
     const grid = new THREE.PolarGridHelper(74, 24, 6, 96, this.accent, this.accent.clone().multiplyScalar(0.35));
     grid.position.y = FLOOR_Y;
-    grid.material.transparent = true;
-    grid.material.opacity = 0.28;
+    const gridMat = grid.material as THREE.Material;
+    gridMat.transparent = true;
+    gridMat.opacity = 0.28;
     this.scene.add(grid);
     const disc = new THREE.Mesh(
       new THREE.RingGeometry(20, 74, 96),
@@ -161,7 +202,7 @@ export class Interior {
     this.scene.add(lbl);
   }
 
-  buildMempool() {
+  private buildMempool(): void {
     const n = 420;
     this.mem = { n, a: new Float32Array(n), r: new Float32Array(n), y: new Float32Array(n), s: new Float32Array(n) };
     const pos = new Float32Array(n * 3);
@@ -184,27 +225,31 @@ export class Interior {
     this.scene.add(this.memPoints);
   }
 
-  buildChain() {
-    this.chain = new THREE.Group();
-    this.scene.add(this.chain);
+  private buildChain(): void {
+    this.helixGroup = new THREE.Group();
+    this.scene.add(this.helixGroup);
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((MAX_BLOCKS + 2) * 3), 3));
     this.chainLine = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: this.accent, transparent: true, opacity: 0.55 }));
     this.chainLine.frustumCulled = false;
-    this.chain.add(this.chainLine);
+    this.helixGroup.add(this.chainLine);
     this.blockGeo = new THREE.BoxGeometry(1, 1, 1);
     this.blockEdges = new THREE.EdgesGeometry(this.blockGeo);
-    const lbl = makeLabel('BLOCK HELIX', { height: 1.8, color: this.labelColor, opacity: 0.8 });
-    lbl.position.set(0, 20 + MAX_BLOCKS * 3.3, 0);
-    this.scene.add(lbl);
+    this.helixLabel = makeLabel('BLOCK HELIX', { height: 1.8, color: this.labelColor, opacity: 0.8 });
+    this.helixLabel.position.set(0, 20 + MAX_BLOCKS * 3.3, 0);
+    // In time travel the helix is short, so its caption sits just above the window being shown.
+    this.historyLabel = makeLabel('BLOCK HELIX · HISTORY', { height: 1.8, color: HISTORY_COLOR, opacity: 0.9 });
+    this.historyLabel.position.set(0, 64, 0);
+    this.historyLabel.visible = false;
+    this.scene.add(this.helixLabel, this.historyLabel);
   }
 
-  helix(i) {
+  private helix(i: number): THREE.Vector3 {
     const a = i * 0.56;
     return new THREE.Vector3(Math.cos(a) * 14, 17 + i * 3.1, Math.sin(a) * 14);
   }
 
-  buildPort() {
+  private buildPort(): void {
     const g = new THREE.Group();
     g.position.copy(PORT);
     const pad = new THREE.Mesh(
@@ -235,12 +280,12 @@ export class Interior {
     pad.userData = { type: 'port' };
     this.pickables.push(pad);
     this.scene.add(g);
-    this.portLight = new THREE.PointLight('#5eead4', 200, 120, 1.6);
-    this.portLight.position.copy(PORT).add(new THREE.Vector3(0, 12, 0));
-    this.scene.add(this.portLight);
+    const portLight = new THREE.PointLight('#5eead4', 200, 120, 1.6);
+    portLight.position.copy(PORT).add(new THREE.Vector3(0, 12, 0));
+    this.scene.add(portLight);
   }
 
-  buildGovHall() {
+  private buildGovHall(): void {
     this.gov = new THREE.Group();
     this.scene.add(this.gov);
     const arc = new THREE.Mesh(
@@ -257,7 +302,7 @@ export class Interior {
   }
 
   // ---------- validators ----------
-  setValidators(list) {
+  setValidators(list: Validator[]): void {
     // Rebuild only when the set changes size/order; otherwise just refresh data.
     const same = this.validators.length === list.length && this.validators.every((p, i) => p.userData.v.operator === list[i].operator);
     if (same) { list.forEach((v, i) => { this.validators[i].userData.v = v; }); return; }
@@ -271,7 +316,7 @@ export class Interior {
     this.valGroup.clear();
 
     const max = list[0]?.power || 1;
-    const baseHue = this.accent.getHSL({}).h;
+    const baseHue = this.accent.getHSL({ h: 0, s: 0, l: 0 }).h;
     let ring = 0, placed = 0;
     while (placed < list.length) {
       const R = 34 + ring * 13;
@@ -286,7 +331,7 @@ export class Interior {
         const mat = new THREE.MeshStandardMaterial({
           color: '#241018', emissive: new THREE.Color().setHSL(hue, 0.85, 0.5), emissiveIntensity: 0.2, metalness: 0.5, roughness: 0.35,
         });
-        const pillar = new THREE.Mesh(geo, mat);
+        const pillar: Pillar = new THREE.Mesh(geo, mat);
         pillar.position.set(Math.cos(a) * R, FLOOR_Y, Math.sin(a) * R);
         const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: mat.emissive, transparent: true, opacity: 0.8 }));
         pillar.add(edges);
@@ -308,7 +353,7 @@ export class Interior {
   }
 
   // ---------- governance ----------
-  setProposals(list) {
+  setProposals(list: Proposal[]): void {
     this.govPanels.forEach((p) => {
       this.gov.remove(p.group);
       p.tex.dispose();
@@ -349,9 +394,9 @@ export class Interior {
   }
 
   // ---------- consensus + blocks ----------
-  setStep(step) { this.step = step; }
+  setStep(step: number): void { this.step = step; }
 
-  onBlock(b) {
+  onBlock(b: Block): void {
     const core = CORE.clone();
     // 1. proposer broadcasts: a beam from the proposer's tower to the core
     const prop = b.proposer && this.validators[b.proposer.index];
@@ -386,39 +431,115 @@ export class Interior {
     });
   }
 
-  addBlock(b) {
+  private addBlock(b: Block): void {
+    this.recent.unshift(b);
+    if (this.recent.length > MAX_BLOCKS) this.recent.pop();
+    // While travelling in time the chain keeps running (the core still fires); the helix just stays where it was put.
+    if (!this.history) this.addMesh(b);
+  }
+
+  private addMesh(b: Block, historic = false): void {
     const n = b.txs.length;
+    const edge = historic ? HISTORY_COLOR : this.labelColor;
     const size = 2.3 + Math.min(2.2, Math.sqrt(n) * 0.55);
     const mat = new THREE.MeshStandardMaterial({
       color: '#2b1119', emissive: n ? this.accent : this.accent.clone().multiplyScalar(0.4), emissiveIntensity: n ? 0.6 : 0.3,
       metalness: 0.3, roughness: 0.4, transparent: true, opacity: 0.92,
     });
-    const mesh = new THREE.Mesh(this.blockGeo, mat);
+    const mesh: BlockMesh = new THREE.Mesh(this.blockGeo, mat);
     mesh.scale.setScalar(0.01);
-    mesh.add(new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: this.labelColor })));
-    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: this.labelColor });
+    const edges = new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: edge }));
+    mesh.add(edges);
+    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: edge });
     lbl.scale.multiplyScalar(1 / size); // keep label size independent of block scale
     lbl.position.set(0, 0.5 + 1.1 / size, 0);
     lbl.center.set(0.5, 0);
     mesh.add(lbl);
-    mesh.userData = { type: 'block', b, size, label: lbl, spin: (Math.random() - 0.5) * 0.6 };
+    mesh.userData = { type: 'block', b, size, label: lbl, edges, spin: (Math.random() - 0.5) * 0.6, base: mat.emissiveIntensity, glow: 0 };
     mesh.position.copy(CORE);
-    this.chain.add(mesh);
+    this.helixGroup.add(mesh);
     this.pickables.push(mesh);
     this.blocks.unshift(mesh);
     tween({ dur: 0.6, easing: ease.out, update: (k) => mesh.scale.setScalar(Math.max(0.01, size * k)) });
     while (this.blocks.length > MAX_BLOCKS) {
-      const old = this.blocks.pop();
+      const old = this.blocks.pop()!;
       this.pickables.splice(this.pickables.indexOf(old), 1);
       tween({
         dur: 0.8, update: (k) => old.scale.setScalar(Math.max(0.01, old.userData.size * (1 - k))),
-        done: () => { this.chain.remove(old); old.material.dispose(); old.userData.label.userData.dispose(); },
+        done: () => this.dropMesh(old),
       });
     }
   }
 
+  private dropMesh(mesh: BlockMesh): void {
+    this.helixGroup.remove(mesh);
+    mesh.material.dispose();
+    mesh.userData.edges.material.dispose();
+    mesh.userData.label.userData.dispose();
+  }
+
+  private clearHelix(): void {
+    this.blocks.forEach((m) => this.dropMesh(m));
+    this.pickables = this.pickables.filter((o) => o.userData.type !== 'block');
+    this.blocks = [];
+  }
+
+  // ---------- time travel ----------
+  get inHistory(): boolean { return this.history; }
+
+  /** Replace the helix with a window of past blocks. The live chain keeps running underneath. */
+  showHistory(blocks: Block[]): void {
+    this.history = true;
+    this.clearHelix();
+    [...blocks].sort((a, b) => a.height - b.height).forEach((b) => this.addMesh(b, true)); // newest ends up at the bottom, as live
+    this.helixLabel.visible = false;
+    this.historyLabel.visible = true;
+  }
+
+  /** Back to the present: rebuild the helix from the blocks witnessed so far. */
+  showLive(): void {
+    if (!this.history) return;
+    this.history = false;
+    this.clearHelix();
+    [...this.recent].reverse().forEach((b) => this.addMesh(b));
+    this.helixLabel.visible = true;
+    this.historyLabel.visible = false;
+  }
+
+  /** True if the block was witnessed live and is part of the present-day helix. */
+  isRecent(height: number): boolean { return this.recent.some((b) => b.height === height); }
+
+  /** Keep these validators' towers lit (an account's delegations). Pass [] to clear. */
+  markValidators(operators: string[]): void {
+    const set = new Set(operators);
+    this.validators.forEach((p) => { p.userData.mark = set.has(p.userData.v.operator); });
+  }
+
+  // ---------- lookups (search, deep links) ----------
+  /** Light up a validator's tower and return the top of it, or null if it is not in the ring. */
+  focusValidator(operator: string): THREE.Vector3 | null {
+    const pillar = this.validators.find((p) => p.userData.v.operator === operator);
+    if (!pillar) return null;
+    pillar.userData.flash = 3;
+    return pillar.userData.top.clone();
+  }
+
+  /** A block currently shown in the helix (live or history), by height. */
+  findBlock(height: number): Block | null {
+    return this.blocks.find((m) => m.userData.b.height === height)?.userData.b ?? null;
+  }
+
+  /** Light up a block in the helix and return where it is, or null if it has scrolled away (or was never witnessed). */
+  focusBlock(height: number): THREE.Vector3 | null {
+    const i = this.blocks.findIndex((m) => m.userData.b.height === height);
+    if (i < 0) return null;
+    this.blocks[i].userData.glow = 2;
+    // Its slot in the helix rather than where the cube is now: a block that just appeared is still flying out from the core.
+    return this.helixGroup.localToWorld(this.helix(i));
+  }
+
   // ---------- IBC ----------
-  launchShip(ibc, { replay = false } = {}) {
+  launchShip(ibc: IbcTransfer, { replay = false } = {}): void {
     // Each counterparty chain gets a stable exit point in the sky above the port.
     const az = (hash01(ibc.chainId) - 0.5) * 2.4;
     const el = 0.35 + hash01(ibc.chainId, 5) * 0.6;
@@ -426,7 +547,7 @@ export class Interior {
     const pad = PORT.clone().add(new THREE.Vector3(0, 1.5, 0));
     const up = PORT.clone().add(new THREE.Vector3(0, 95, 0));
     const out = ibc.dir === 'out';
-    const curve = new THREE.QuadraticBezierCurve3(...(out ? [pad, up, exit] : [exit, up, pad]));
+    const curve = out ? new THREE.QuadraticBezierCurve3(pad, up, exit) : new THREE.QuadraticBezierCurve3(exit, up, pad);
     const label = `${out ? '→' : '←'} ${ibc.chainName}${ibc.amount ? ' · ' + ibc.amount : ''}${replay ? ' · replay' : ''}`;
     this.ships.push(new Ship(this.scene, curve, {
       color: ibc.color, dur: out ? 7 : 6, size: 2, label, easing: out ? ease.in : ease.out,
@@ -437,7 +558,7 @@ export class Interior {
     });
   }
 
-  flash(p, color, size) {
+  private flash(p: THREE.Vector3, color: string, size: number): void {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: dotTexture(), color, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
     s.position.copy(p);
     this.scene.add(s);
@@ -445,18 +566,18 @@ export class Interior {
   }
 
   // Free GPU resources when the visitor leaves the planet (the dot texture is shared, keep it).
-  dispose() {
+  dispose(): void {
     const shared = dotTexture();
     this.scene.traverse((o) => {
-      o.geometry?.dispose();
-      const m = o.material;
+      const { geometry, material: m } = o as Partial<THREE.Mesh<THREE.BufferGeometry, THREE.Material & { map?: THREE.Texture | null }>>;
+      geometry?.dispose();
       if (m) { if (m.map && m.map !== shared) m.map.dispose(); m.dispose(); }
     });
     this.queue = [];
   }
 
   // ---------- frame ----------
-  update(dt, t) {
+  update(dt: number, t: number): void {
     this.time += dt;
     for (let i = this.queue.length - 1; i >= 0; i--) {
       if (this.queue[i].at <= this.time) { const q = this.queue.splice(i, 1)[0]; q.fn(); }
@@ -486,13 +607,13 @@ export class Interior {
       const u = p.userData;
       u.flash = Math.max(0, u.flash - dt * 1.6);
       u.bad = Math.max(0, u.bad - dt * 0.8);
-      p.material.emissiveIntensity = 0.2 + u.flash * 0.7;
+      p.material.emissiveIntensity = 0.2 + u.flash * 0.7 + (u.mark ? 0.75 + 0.2 * Math.sin(t * 3) : 0);
       p.material.color.setRGB(0.02 + u.bad * 0.5, 0.008, 0.012);
     }
 
     // mempool swirl
     const m = this.mem;
-    const pos = this.memPoints.geometry.attributes.position.array;
+    const pos = this.memPoints.geometry.attributes.position.array as Float32Array;
     for (let i = 0; i < m.n; i++) {
       m.a[i] += dt * m.s[i] * (1 + this.corePulse * 3);
       const r = m.r[i] * (1 - this.corePulse * 0.25);
@@ -503,12 +624,14 @@ export class Interior {
     this.memPoints.geometry.attributes.position.needsUpdate = true;
 
     // block helix
-    this.chain.rotation.y += dt * 0.05;
-    const line = this.chainLine.geometry.attributes.position.array;
+    this.helixGroup.rotation.y += dt * 0.05;
+    const line = this.chainLine.geometry.attributes.position.array as Float32Array;
     line.set([0, 0, 0], 0);
     this.blocks.forEach((mesh, i) => {
       mesh.position.lerp(this.helix(i), Math.min(1, dt * 3));
       mesh.rotation.y += dt * mesh.userData.spin;
+      mesh.userData.glow = Math.max(0, mesh.userData.glow - dt * 0.45);
+      mesh.material.emissiveIntensity = mesh.userData.base + mesh.userData.glow * 1.6;
       mesh.userData.label.visible = i < 8 || i % 4 === 0;
       line.set([mesh.position.x, mesh.position.y, mesh.position.z], (i + 1) * 3);
     });
@@ -529,10 +652,10 @@ export class Interior {
   }
 }
 
-function drawProposal(p) {
+function drawProposal(p: Proposal): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = 640; c.height = 400;
-  const g = c.getContext('2d');
+  const g = c.getContext('2d')!;
   const st = statusStyle(p.status);
   g.fillStyle = 'rgba(14, 8, 24, 0.9)';
   g.fillRect(0, 0, 640, 400);
@@ -550,7 +673,7 @@ function drawProposal(p) {
   g.fillStyle = '#ffffff';
   g.font = '600 38px "Space Grotesk", system-ui, sans-serif';
   const words = p.title.split(/\s+/);
-  const lines = [];
+  const lines: string[] = [];
   let cur = '';
   for (const word of words) {
     const t = cur ? `${cur} ${word}` : word;
@@ -562,7 +685,7 @@ function drawProposal(p) {
   // tally
   const { yes, no, abstain, veto } = p.tally;
   const total = yes + no + abstain + veto;
-  const parts = [[yes, '#4ade80', 'Yes'], [no, '#f87171', 'No'], [veto, '#b91c1c', 'Veto'], [abstain, '#94a3b8', 'Abstain']];
+  const parts: [number, string, string][] = [[yes, '#4ade80', 'Yes'], [no, '#f87171', 'No'], [veto, '#b91c1c', 'Veto'], [abstain, '#94a3b8', 'Abstain']];
   g.fillStyle = 'rgba(255,255,255,0.08)';
   g.beginPath(); g.roundRect(32, 296, 576, 26, 13); g.fill();
   if (total > 0) {

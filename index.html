@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Cosmos Space — fly into live Cosmos blockchains in 3D</title>
+  <title>Cosmos Space — a 3D explorer for live Cosmos blockchains</title>
   <meta name="description" content="Juno, Cosmos Hub, Osmosis, Neutron, Akash and Noble as planets. Fly into any of them and watch validators, consensus, blocks, transactions, governance and IBC transfers happen live in 3D." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,6 +21,10 @@
       <small class="space-only">The interchain, one planet per chain</small>
       <small class="inside-only"><span id="chain-id"></span> · <span id="net-badge" class="badge">connecting…</span></small>
     </div>
+    <button id="search-open" title="Search blocks, transactions, addresses and validators" aria-label="Search">
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.6 10.6 14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <span>Search</span><kbd>/</kbd>
+    </button>
   </header>
 
   <section id="home-stats">
@@ -62,6 +66,13 @@
       <p class="hint">Click a planet to fly inside · drag to orbit · scroll to zoom</p>
     </div>
     <div class="inside-only">
+      <div id="timeline" hidden>
+        <button id="tl-older" title="Older blocks" aria-label="Older blocks">◀</button>
+        <input id="tl-range" type="range" min="0" max="1000" value="1000" step="1" aria-label="Scrub through block history" />
+        <button id="tl-newer" title="Newer blocks" aria-label="Newer blocks" disabled>▶</button>
+        <span id="tl-label">Live</span>
+        <button id="tl-live" hidden>● Live</button>
+      </div>
       <div id="districts">
         <button data-view="overview">Overview</button>
         <button data-view="core">Consensus</button>
@@ -79,6 +90,15 @@
 
   <div id="tooltip" hidden></div>
 
+  <div id="search" hidden>
+    <div class="search-card" role="dialog" aria-label="Search">
+      <input id="search-input" type="text" placeholder="Search a block, transaction, address or validator" autocomplete="off" autocapitalize="off" spellcheck="false"
+        role="combobox" aria-expanded="true" aria-controls="search-results" aria-label="Search" />
+      <ul id="search-results" role="listbox"></ul>
+      <p id="search-status"></p>
+    </div>
+  </div>
+
   <div id="intro">
     <div class="intro-card">
       <span class="glyph big"></span>
@@ -89,6 +109,6 @@
     </div>
   </div>
 
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

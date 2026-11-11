@@ -2,7 +2,9 @@
 // Cosmos SDK LCD routes, so adding one is just another entry here.
 // Endpoints are tried in order with automatic failover.
 
-export const PLANETS = [
+import type { Planet } from './types';
+
+export const PLANETS: Planet[] = [
   {
     key: 'juno', chainId: 'juno-1', name: 'Juno', symbol: 'JUNO', prefix: 'juno', color: '#f0827d',
     explorer: 'https://ping.pub/juno', simHeight: 43_000_000, simBlockTime: 2.8,
@@ -36,4 +38,4 @@ export const PLANETS = [
   },
 ];
 
-export const planetByKey = (key) => PLANETS.find((p) => p.key === key) || null;
+export const planetByKey = (key: string | null): Planet | null => PLANETS.find((p) => p.key === key) || null;
