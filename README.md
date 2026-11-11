@@ -58,13 +58,16 @@ URL flags: `?sim` (simulated chains), `?enter=<chain>` (skip the intro and fly s
 
 ## Stack
 
-Vite + Three.js (custom GLSL for the planet and shell, bloom post-processing). No framework.
+Vite + Three.js + TypeScript (strict; custom GLSL for the planet and shell, bloom post-processing). No framework.
+`npm run typecheck` checks types; `npm run build` type-checks before bundling.
 
 ```
-src/chains.js    the included chains (ids, endpoints, colours) — add a chain here
-src/data.js      per-chain live feed + simulation fallback
-src/space.js     home scene with all planets
-src/interior.js  inside-the-planet scene
-src/main.js      camera, HUD, picking, wiring
-src/util.js      labels, tweens, particle pool, ships
+src/chains.ts    the included chains (ids, endpoints, colours) — add a chain here
+src/types.ts     shared data shapes (chain config, validators, blocks, feed events…)
+src/lcd.ts       REST client with endpoint failover, one per chain
+src/data.ts      per-chain live feed + simulation fallback
+src/space.ts     home scene with all planets
+src/interior.ts  inside-the-planet scene
+src/main.ts      camera, HUD, picking, wiring
+src/util.ts      labels, tweens, particle pool, ships
 ```

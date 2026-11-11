@@ -1,17 +1,18 @@
 import * as THREE from 'three';
 
 // '#rrggbb' → raw sRGB components, for shaders that author colour in display space.
-export function srgbVec(hex) {
+export function srgbVec(hex: string): THREE.Vector3 {
   const n = parseInt(hex.slice(1), 16);
   return new THREE.Vector3(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
 }
 
 // ---------- text sprites ----------
-export function makeLabel(text, { color = '#ffffff', height = 2, weight = 600, bg = null, opacity = 1 } = {}) {
+export interface LabelOpts { color?: string; height?: number; weight?: number; bg?: string | null; opacity?: number }
+export function makeLabel(text: string, { color = '#ffffff', height = 2, weight = 600, bg = null, opacity = 1 }: LabelOpts = {}): THREE.Sprite {
   const fs = 56;
   const font = `${weight} ${fs}px "Space Grotesk", "Inter", system-ui, sans-serif`;
   const c = document.createElement('canvas');
-  const g = c.getContext('2d');
+  const g = c.getContext('2d')!;
   g.font = font;
   const pad = bg ? 28 : 8;
   c.width = Math.min(2048, Math.ceil(g.measureText(text).width) + pad * 2);
@@ -36,12 +37,12 @@ export function makeLabel(text, { color = '#ffffff', height = 2, weight = 600, b
   return s;
 }
 
-let _dot;
-export function dotTexture() {
+let _dot: THREE.CanvasTexture | undefined;
+export function dotTexture(): THREE.CanvasTexture {
   if (_dot) return _dot;
   const c = document.createElement('canvas');
   c.width = c.height = 64;
-  const g = c.getContext('2d');
+  const g = c.getContext('2d')!;
   const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
   grd.addColorStop(0, 'rgba(255,255,255,1)');
   grd.addColorStop(0.3, 'rgba(255,255,255,0.7)');
@@ -53,19 +54,23 @@ export function dotTexture() {
 }
 
 // ---------- tweens ----------
-const tweens = [];
+export type Easing = (t: number) => number;
+export interface Tween { t: number; dur: number; easing: Easing; update?: (k: number) => void; done?: () => void; dead: boolean }
+export interface TweenOpts { dur?: number; delay?: number; easing?: Easing; update?: (k: number) => void; done?: () => void }
+
+const tweens: Tween[] = [];
 export const ease = {
-  inOut: (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
-  out: (t) => 1 - Math.pow(1 - t, 3),
-  in: (t) => t * t * t,
-  linear: (t) => t,
+  inOut: (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2),
+  out: (t: number) => 1 - Math.pow(1 - t, 3),
+  in: (t: number) => t * t * t,
+  linear: (t: number) => t,
 };
-export function tween({ dur = 1, delay = 0, easing = ease.inOut, update, done }) {
-  const tw = { t: -delay, dur, easing, update, done, dead: false };
+export function tween({ dur = 1, delay = 0, easing = ease.inOut, update, done }: TweenOpts): Tween {
+  const tw: Tween = { t: -delay, dur, easing, update, done, dead: false };
   tweens.push(tw);
   return tw;
 }
-export function stepTweens(dt) {
+export function stepTweens(dt: number): void {
   for (let i = tweens.length - 1; i >= 0; i--) {
     const tw = tweens[i];
     if (tw.dead) { tweens.splice(i, 1); continue; }
@@ -77,17 +82,25 @@ export function stepTweens(dt) {
   }
 }
 
-export function hash01(str, salt = 0) {
+export function hash01(str: string, salt = 0): number {
   let h = 2166136261 ^ salt;
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
   return ((h >>> 0) % 100000) / 100000;
 }
 
 // A particle pool: glowing points that fly from A to B along a soft arc.
+interface Flyer { from: THREE.Vector3; to: THREE.Vector3; t: number; dur: number; arc: number; onArrive?: () => void }
+export interface FlyerOpts { dur?: number; delay?: number; arc?: number; onArrive?: () => void }
+
 export class Flyers {
-  constructor(max = 600, size = 2.2) {
-    this.max = max;
-    this.items = new Array(max).fill(null);
+  points: THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+  private items: (Flyer | null)[];
+  private pos: Float32Array;
+  private col: Float32Array;
+  private cursor = 0;
+
+  constructor(private max = 600, size = 2.2) {
+    this.items = new Array<Flyer | null>(max).fill(null);
     this.pos = new Float32Array(max * 3).fill(1e5);
     this.col = new Float32Array(max * 3);
     const geo = new THREE.BufferGeometry();
@@ -98,10 +111,9 @@ export class Flyers {
       blending: THREE.AdditiveBlending, sizeAttenuation: true,
     }));
     this.points.frustumCulled = false;
-    this.cursor = 0;
   }
 
-  spawn(from, to, color, { dur = 0.9, delay = 0, arc = 0, onArrive } = {}) {
+  spawn(from: THREE.Vector3, to: THREE.Vector3, color: THREE.ColorRepresentation, { dur = 0.9, delay = 0, arc = 0, onArrive }: FlyerOpts = {}): void {
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % this.max;
     const c = new THREE.Color(color);
@@ -110,7 +122,7 @@ export class Flyers {
     this.points.geometry.attributes.color.needsUpdate = true;
   }
 
-  update(dt) {
+  update(dt: number): void {
     for (let i = 0; i < this.max; i++) {
       const f = this.items[i];
       if (!f) continue;
@@ -133,15 +145,24 @@ export class Flyers {
 }
 
 // A glowing ship with a fading trail that follows a curve (used for IBC packets).
+export interface ShipOpts { color?: string; dur?: number; size?: number; label?: string; easing?: Easing; onDone?: (p: THREE.Vector3) => void }
+
 export class Ship {
-  constructor(scene, curve, { color = '#5eead4', dur = 5, size = 1, label = '', easing = ease.in, onDone } = {}) {
-    this.scene = scene;
-    this.curve = curve;
+  private dur: number;
+  private t = 0;
+  private easing: Easing;
+  private onDone?: (p: THREE.Vector3) => void;
+  private group = new THREE.Group();
+  private head: THREE.Mesh;
+  private trail: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  private label?: THREE.Sprite;
+  private N = 28;
+
+  constructor(private scene: THREE.Scene, private curve: THREE.Curve<THREE.Vector3>,
+    { color = '#5eead4', dur = 5, size = 1, label = '', easing = ease.in, onDone }: ShipOpts = {}) {
     this.dur = dur;
-    this.t = 0;
     this.easing = easing;
     this.onDone = onDone;
-    this.group = new THREE.Group();
     const col = new THREE.Color(color);
     this.head = new THREE.Mesh(
       new THREE.OctahedronGeometry(0.7 * size, 0),
@@ -155,7 +176,6 @@ export class Ship {
     glow.scale.setScalar(5 * size);
     this.head.add(glow);
 
-    this.N = 28;
     const pos = new Float32Array(this.N * 3);
     const cols = new Float32Array(this.N * 3);
     for (let i = 0; i < this.N; i++) {
@@ -179,7 +199,8 @@ export class Ship {
     scene.add(this.group);
   }
 
-  update(dt) {
+  /** Advance the flight; returns false once the ship has arrived and removed itself. */
+  update(dt: number): boolean {
     this.t += dt;
     const k = Math.min(1, this.t / this.dur);
     const e = this.easing(k);
@@ -195,11 +216,12 @@ export class Ship {
     return true;
   }
 
-  dispose() {
+  dispose(): void {
     this.scene.remove(this.group);
     this.trail.geometry.dispose();
     this.trail.material.dispose();
     this.head.geometry.dispose();
+    (this.head.material as THREE.Material).dispose();
     this.label?.userData.dispose();
   }
 }
