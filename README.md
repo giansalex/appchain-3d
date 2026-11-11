@@ -29,9 +29,9 @@ Press `/` (or `Ctrl`/`⌘`+`K`, or the **Search** button) anywhere and type:
 
 | You type | You get |
 | --- | --- |
-| A number | That block on any chain (the visited chain first), or the proposal with that id |
-| A 64-character tx hash | The transaction on the visited chain, or found across all chains |
-| An address (`cosmos1…`, `osmo1…`) | The account on the chain that owns the prefix: balances and staked total |
+| A number | That block on any chain (the visited chain first), or the proposal with that id. An old block time-travels the helix to it |
+| A 64-character tx hash | The transaction on the visited chain, or found across all chains: status, signer, fee, gas, every message decoded, and its events |
+| An address (`cosmos1…`, `osmo1…`) | The account on the chain that owns the prefix: balances, delegations with pending rewards, unbonding entries. The towers it stakes with light up |
 | A validator name or `…valoper1…` address | The validator; the camera flies to its tower |
 | A chain name | Its planet |
 
@@ -47,7 +47,17 @@ Everything you open has its own URL, so it can be shared and the browser's back/
 #/osmosis/proposal/<id>
 ```
 
-Opening a link to another chain leaves the current planet and flies into the right one. A block that is still in the helix is lit up and the camera flies to it; older blocks are fetched by height. Blocks link to their transactions and proposer, transactions link to their block, and blocks have previous/next links.
+Opening a link to another chain leaves the current planet and flies into the right one. Blocks link to their transactions and proposer, transactions link to their block and signer, accounts link to their validators, and blocks have previous/next links — so you can walk the chain without leaving the panel. (An account's transaction history is not included: that needs an indexer.)
+
+## Time travel
+
+Inside a planet, the bar above the dock scrubs the Block Helix through history:
+
+- Drag the scrubber left to go back. It is logarithmic — fine steps near the present, up to a million blocks at the far end — and shows the height and roughly how long ago while you drag.
+- `◀` / `▶` step one window (12 blocks) older or newer; **● Live** returns to the present.
+- Opening an old block or transaction (search, link, previous/next) moves the helix there and flies the camera to the block.
+
+Past blocks are outlined in amber and the helix is captioned `HISTORY`. The chain keeps running while you look back: the core still fires and the feed still scrolls, and the live helix is restored when you return.
 
 Public nodes keep only recent history, so old blocks and transactions can come back "not found". The simulation has no real chain behind it: only validators, proposals and blocks you watched can be opened there.
 
@@ -59,7 +69,9 @@ Everything is read live from public LCD endpoints (publicnode, Polkachu, cosmos.
 
 - Blocks, decoded transactions, proposer and commit signatures: `/cosmos/tx/v1beta1/txs/block/{height}`
 - Validators: `/cosmos/staking/v1beta1/validators`
-- Transaction by hash: `/cosmos/tx/v1beta1/txs/{hash}`; account: `/cosmos/bank/v1beta1/balances/{address}` and `/cosmos/staking/v1beta1/delegations/{address}`
+- Transaction by hash: `/cosmos/tx/v1beta1/txs/{hash}`
+- Account: `/cosmos/bank/v1beta1/balances/{address}`, `/cosmos/auth/v1beta1/accounts/{address}`, `/cosmos/staking/v1beta1/delegations/{address}`, `/cosmos/distribution/v1beta1/delegators/{address}/rewards`, `/cosmos/staking/v1beta1/delegators/{address}/unbonding_delegations`
+- History: the same per-height block route as the live feed, 12 blocks per window, cached
 - Proposals and tallies: `/cosmos/gov/v1/proposals`
 - IBC destination chains are resolved from each channel's client state.
 
@@ -98,6 +110,9 @@ src/data.ts      per-chain live feed + simulation fallback
 src/lookup.ts    one-off lookups: transaction, account, validator index
 src/router.ts    hash routes (parse / format)
 src/search.ts    search palette
+src/panels.ts    detail panels: validator, block, transaction, account, proposal
+src/timeline.ts  time travel: scrub the helix through history
+src/dom.ts       DOM helpers
 src/space.ts     home scene with all planets
 src/interior.ts  inside-the-planet scene
 src/main.ts      camera, HUD, picking, routing, wiring

@@ -59,6 +59,8 @@ export interface Block {
   absent: number;
   txs: BlockTx[];
   undecoded?: boolean;
+  /** block hash, upper-case hex */
+  hash?: string;
 }
 
 export interface IbcTransfer {

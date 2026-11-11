@@ -66,6 +66,13 @@
       <p class="hint">Click a planet to fly inside · drag to orbit · scroll to zoom</p>
     </div>
     <div class="inside-only">
+      <div id="timeline" hidden>
+        <button id="tl-older" title="Older blocks" aria-label="Older blocks">◀</button>
+        <input id="tl-range" type="range" min="0" max="1000" value="1000" step="1" aria-label="Scrub through block history" />
+        <button id="tl-newer" title="Newer blocks" aria-label="Newer blocks" disabled>▶</button>
+        <span id="tl-label">Live</span>
+        <button id="tl-live" hidden>● Live</button>
+      </div>
       <div id="districts">
         <button data-view="overview">Overview</button>
         <button data-view="core">Consensus</button>

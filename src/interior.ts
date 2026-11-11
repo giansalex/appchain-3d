@@ -9,6 +9,7 @@ const PORT = new THREE.Vector3(104, FLOOR_Y, 0);
 const GOV_R = 108;
 const SHELL_R = 420;
 const MAX_BLOCKS = 34;
+const HISTORY_COLOR = '#fde68a'; // blocks shown by time travel are outlined in amber
 
 export type ViewName = 'overview' | 'core' | 'validators' | 'blocks' | 'gov' | 'ibc';
 type Vec3 = [number, number, number];
@@ -54,6 +55,10 @@ export class Interior {
   private labelColor: string;
   private validators: Pillar[] = [];
   private blocks: BlockMesh[] = [];
+  private recent: Block[] = [];   // the live blocks, newest first: what the helix returns to after time travel
+  private history = false;        // the helix is showing fetched history instead of the live head
+  private helixLabel!: THREE.Sprite;
+  private historyLabel!: THREE.Sprite;
   private ships: Ship[] = [];
   private queue: { at: number; fn: () => void }[] = [];
   private time = 0;
@@ -230,9 +235,13 @@ export class Interior {
     this.helixGroup.add(this.chainLine);
     this.blockGeo = new THREE.BoxGeometry(1, 1, 1);
     this.blockEdges = new THREE.EdgesGeometry(this.blockGeo);
-    const lbl = makeLabel('BLOCK HELIX', { height: 1.8, color: this.labelColor, opacity: 0.8 });
-    lbl.position.set(0, 20 + MAX_BLOCKS * 3.3, 0);
-    this.scene.add(lbl);
+    this.helixLabel = makeLabel('BLOCK HELIX', { height: 1.8, color: this.labelColor, opacity: 0.8 });
+    this.helixLabel.position.set(0, 20 + MAX_BLOCKS * 3.3, 0);
+    // In time travel the helix is short, so its caption sits just above the window being shown.
+    this.historyLabel = makeLabel('BLOCK HELIX · HISTORY', { height: 1.8, color: HISTORY_COLOR, opacity: 0.9 });
+    this.historyLabel.position.set(0, 64, 0);
+    this.historyLabel.visible = false;
+    this.scene.add(this.helixLabel, this.historyLabel);
   }
 
   private helix(i: number): THREE.Vector3 {
@@ -423,7 +432,15 @@ export class Interior {
   }
 
   private addBlock(b: Block): void {
+    this.recent.unshift(b);
+    if (this.recent.length > MAX_BLOCKS) this.recent.pop();
+    // While travelling in time the chain keeps running (the core still fires); the helix just stays where it was put.
+    if (!this.history) this.addMesh(b);
+  }
+
+  private addMesh(b: Block, historic = false): void {
     const n = b.txs.length;
+    const edge = historic ? HISTORY_COLOR : this.labelColor;
     const size = 2.3 + Math.min(2.2, Math.sqrt(n) * 0.55);
     const mat = new THREE.MeshStandardMaterial({
       color: '#2b1119', emissive: n ? this.accent : this.accent.clone().multiplyScalar(0.4), emissiveIntensity: n ? 0.6 : 0.3,
@@ -431,13 +448,14 @@ export class Interior {
     });
     const mesh: BlockMesh = new THREE.Mesh(this.blockGeo, mat);
     mesh.scale.setScalar(0.01);
-    mesh.add(new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: this.labelColor })));
-    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: this.labelColor });
+    const edges = new THREE.LineSegments(this.blockEdges, new THREE.LineBasicMaterial({ color: edge }));
+    mesh.add(edges);
+    const lbl = makeLabel(`#${b.height.toLocaleString('en-US')}${n ? ` · ${n} tx` : ''}`, { height: 1.2, color: edge });
     lbl.scale.multiplyScalar(1 / size); // keep label size independent of block scale
     lbl.position.set(0, 0.5 + 1.1 / size, 0);
     lbl.center.set(0.5, 0);
     mesh.add(lbl);
-    mesh.userData = { type: 'block', b, size, label: lbl, spin: (Math.random() - 0.5) * 0.6, base: mat.emissiveIntensity, glow: 0 };
+    mesh.userData = { type: 'block', b, size, label: lbl, edges, spin: (Math.random() - 0.5) * 0.6, base: mat.emissiveIntensity, glow: 0 };
     mesh.position.copy(CORE);
     this.helixGroup.add(mesh);
     this.pickables.push(mesh);
@@ -448,9 +466,53 @@ export class Interior {
       this.pickables.splice(this.pickables.indexOf(old), 1);
       tween({
         dur: 0.8, update: (k) => old.scale.setScalar(Math.max(0.01, old.userData.size * (1 - k))),
-        done: () => { this.helixGroup.remove(old); old.material.dispose(); old.userData.label.userData.dispose(); },
+        done: () => this.dropMesh(old),
       });
     }
+  }
+
+  private dropMesh(mesh: BlockMesh): void {
+    this.helixGroup.remove(mesh);
+    mesh.material.dispose();
+    mesh.userData.edges.material.dispose();
+    mesh.userData.label.userData.dispose();
+  }
+
+  private clearHelix(): void {
+    this.blocks.forEach((m) => this.dropMesh(m));
+    this.pickables = this.pickables.filter((o) => o.userData.type !== 'block');
+    this.blocks = [];
+  }
+
+  // ---------- time travel ----------
+  get inHistory(): boolean { return this.history; }
+
+  /** Replace the helix with a window of past blocks. The live chain keeps running underneath. */
+  showHistory(blocks: Block[]): void {
+    this.history = true;
+    this.clearHelix();
+    [...blocks].sort((a, b) => a.height - b.height).forEach((b) => this.addMesh(b, true)); // newest ends up at the bottom, as live
+    this.helixLabel.visible = false;
+    this.historyLabel.visible = true;
+  }
+
+  /** Back to the present: rebuild the helix from the blocks witnessed so far. */
+  showLive(): void {
+    if (!this.history) return;
+    this.history = false;
+    this.clearHelix();
+    [...this.recent].reverse().forEach((b) => this.addMesh(b));
+    this.helixLabel.visible = true;
+    this.historyLabel.visible = false;
+  }
+
+  /** True if the block was witnessed live and is part of the present-day helix. */
+  isRecent(height: number): boolean { return this.recent.some((b) => b.height === height); }
+
+  /** Keep these validators' towers lit (an account's delegations). Pass [] to clear. */
+  markValidators(operators: string[]): void {
+    const set = new Set(operators);
+    this.validators.forEach((p) => { p.userData.mark = set.has(p.userData.v.operator); });
   }
 
   // ---------- lookups (search, deep links) ----------
@@ -462,17 +524,18 @@ export class Interior {
     return pillar.userData.top.clone();
   }
 
-  /** A block still in the helix, by height. */
+  /** A block currently shown in the helix (live or history), by height. */
   findBlock(height: number): Block | null {
     return this.blocks.find((m) => m.userData.b.height === height)?.userData.b ?? null;
   }
 
   /** Light up a block in the helix and return where it is, or null if it has scrolled away (or was never witnessed). */
   focusBlock(height: number): THREE.Vector3 | null {
-    const mesh = this.blocks.find((m) => m.userData.b.height === height);
-    if (!mesh) return null;
-    mesh.userData.glow = 2;
-    return mesh.getWorldPosition(new THREE.Vector3());
+    const i = this.blocks.findIndex((m) => m.userData.b.height === height);
+    if (i < 0) return null;
+    this.blocks[i].userData.glow = 2;
+    // Its slot in the helix rather than where the cube is now: a block that just appeared is still flying out from the core.
+    return this.helixGroup.localToWorld(this.helix(i));
   }
 
   // ---------- IBC ----------
@@ -544,7 +607,7 @@ export class Interior {
       const u = p.userData;
       u.flash = Math.max(0, u.flash - dt * 1.6);
       u.bad = Math.max(0, u.bad - dt * 0.8);
-      p.material.emissiveIntensity = 0.2 + u.flash * 0.7;
+      p.material.emissiveIntensity = 0.2 + u.flash * 0.7 + (u.mark ? 0.75 + 0.2 * Math.sin(t * 3) : 0);
       p.material.color.setRGB(0.02 + u.bad * 0.5, 0.008, 0.012);
     }
 

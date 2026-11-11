@@ -74,6 +74,18 @@ export function formatToken(amount: string | number | undefined, denom = ''): st
   return denom.startsWith('ibc/') ? 'IBC asset' : base.slice(0, 14);
 }
 
+/** Like formatToken, but never drops the number: unknown denoms are shown shortened. */
+export function formatAmount(amount: string | number, denom: string): string {
+  const n = Number(amount);
+  const base = denom.split('/').pop() ?? '';
+  // micro-denominations ("uatom", "factory/…/uusdc") are shown in whole tokens
+  if (/^u[a-z]+$/.test(base) && !denom.startsWith('ibc/')) {
+    return `${(n / 1e6).toLocaleString('en-US', { maximumFractionDigits: n < 1e4 ? 6 : 2 })} ${base.slice(1).toUpperCase()}`;
+  }
+  const short = denom.length > 18 ? `${denom.slice(0, 10)}…${denom.slice(-4)}` : denom;
+  return `${n.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${short}`;
+}
+
 /** Bonded validators from the staking module, largest stake first, with rank and power share filled in. */
 export function toValidators(d: any): Validator[] {
   const list: Validator[] = (d.validators as any[]).map((v) => ({
@@ -112,7 +124,8 @@ function toProposal(p: any, t: any): Proposal {
 
 type Listeners = { [K in keyof FeedEvents]?: Array<(data: FeedEvents[K]) => void> };
 type TimerId = ReturnType<typeof setTimeout>;
-interface RawBlock { block: any; txs: any[]; undecoded?: boolean }
+interface RawBlock { block: any; txs: any[]; undecoded?: boolean; block_id?: { hash?: string } }
+const BLOCK_CACHE = 400;
 
 export class ChainFeed {
   mode: FeedMode = 'connecting';
@@ -135,6 +148,7 @@ export class ChainFeed {
   private lastBlockTime = 0;
   private channelCache = new Map<string, Promise<string | null>>();
   private fails = 0;
+  private blockCache = new Map<number, Block>(); // fetched history, oldest entry evicted first
   private ready: Promise<void>;
   private markReady!: () => void;
 
@@ -311,10 +325,10 @@ export class ChainFeed {
         const from = this.height ? Math.max(this.height + 1, h - 2) : h;
         for (let n = from; n <= h; n++) {
           let data: RawBlock | null = null;
-          if (n === h && !(latest.block.data?.txs || []).length) data = { block: latest.block, txs: [] };
+          if (n === h && !(latest.block.data?.txs || []).length) data = { block: latest.block, txs: [], block_id: latest.block_id };
           else {
             try { data = await this.get(`/cosmos/tx/v1beta1/txs/block/${n}`); } catch {
-              if (n === h) data = { block: latest.block, txs: [], undecoded: true };
+              if (n === h) data = { block: latest.block, txs: [], undecoded: true, block_id: latest.block_id };
             }
           }
           if (this.stopped) return;
@@ -340,10 +354,15 @@ export class ChainFeed {
   /** Any block by height, decoded the same way as the live ones. Signers are matched against today's validator set. */
   async fetchBlock(height: number): Promise<Block> {
     if (this.mode !== 'live') throw new Error('not available in simulation');
-    return (await this.parseBlock(await this.get(`/cosmos/tx/v1beta1/txs/block/${height}`))).block;
+    const hit = this.blockCache.get(height);
+    if (hit) return hit;
+    const { block } = await this.parseBlock(await this.get(`/cosmos/tx/v1beta1/txs/block/${height}`));
+    this.blockCache.set(height, block);
+    if (this.blockCache.size > BLOCK_CACHE) this.blockCache.delete(this.blockCache.keys().next().value!);
+    return block;
   }
 
-  private async parseBlock({ block, txs, undecoded }: RawBlock): Promise<{ block: Block; ibcs: IbcTransfer[] }> {
+  private async parseBlock({ block, txs, undecoded, block_id }: RawBlock): Promise<{ block: Block; ibcs: IbcTransfer[] }> {
     const header = block.header;
     const all: string[] = block.data?.txs || [];
     // Some chains inject non-transaction payloads at the top of each block (e.g. Neutron's oracle
@@ -381,6 +400,7 @@ export class ChainFeed {
         absent,
         txs: outTxs,
         undecoded: !!undecoded,
+        hash: block_id?.hash ? toHex(b64(block_id.hash)) : undefined,
       },
       ibcs,
     };

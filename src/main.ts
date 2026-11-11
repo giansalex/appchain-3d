@@ -6,42 +6,22 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import './style.css';
 import { ChainFeed, KINDS } from './data';
+import { $, compact, el, flatKids, fmt, ilink, shortHash, type Children } from './dom';
+import { accountPanel, blockPanel, proposalPanel, txPanel, validatorPanel, type PanelCtx } from './panels';
+import { initTimeline } from './timeline';
 import { PLANETS, planetByKey } from './chains';
 import { Space } from './space';
 import { Interior, VIEWS, statusStyle, type ViewName } from './interior';
 import { ease, stepTweens, tween, type Easing, type Tween } from './util';
-import { NotFound, fetchAccount, fetchTx, validatorIndex, type AccountDetail, type TxDetail } from './lookup';
+import { NotFound, fetchAccount, fetchTx, validatorIndex } from './lookup';
 import { formatRoute, parseRoute, type Entity, type Route } from './router';
 import { initSearch } from './search';
-import type { Block, IbcTransfer, Kind, PickData, Planet, Proposal, Validator } from './types';
+import type { Block, IbcTransfer, PickData, Planet } from './types';
 
 type Vec3 = [number, number, number];
-type Child = Node | string | null | undefined | false;
 
-const $ = <T extends HTMLElement = HTMLElement>(s: string): T => {
-  const e = document.querySelector<T>(s);
-  if (!e) throw new Error(`missing element ${s}`);
-  return e;
-};
 const HOME_ACCENT = '#8b93ff';
 const HOME_POS: Vec3 = [0, 36, 110];
-const fmt = (n: number, d = 0) => Number(n).toLocaleString('en-US', { maximumFractionDigits: d });
-const compact = (n: number) => Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
-
-// Chain data (monikers, proposal text…) is untrusted: always build DOM with text nodes.
-function el(tag: string, props: Record<string, string> = {}, ...kids: (Child | Child[])[]): HTMLElement {
-  const e = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k === 'style') e.style.cssText = v; else if (k === 'class') e.className = v; else e.setAttribute(k, v);
-  }
-  kids.flat().forEach((k) => { if (k != null && k !== false) e.append(k); });
-  return e;
-}
-/** In-app link: changing the hash is what navigates. */
-const ilink = (route: Route, text: string, title = '') => el('a', title ? { href: formatRoute(route), title } : { href: formatRoute(route) }, text);
-const shortHash = (h: string) => `${h.slice(0, 6)}…${h.slice(-4)}`;
-const link = (href: string, text: string) => el('a', { href, target: '_blank', rel: 'noopener noreferrer' }, text);
-const safeUrl = (u: string): string | null => { try { const x = new URL(u); return /^https?:$/.test(x.protocol) ? x.href : null; } catch { return null; } };
 
 // ---------- renderer ----------
 const canvas = $<HTMLCanvasElement>('#scene');
@@ -212,14 +192,12 @@ function startTour(): void {
 
 // ---------- detail panel ----------
 const detail = $('#detail'), detailBody = $('#detail-body');
-function openDetail(...nodes: (Child | Child[])[]): void {
-  detailBody.replaceChildren(...nodes.flat().filter((n): n is Node | string => n != null && n !== false));
+function openDetail(...nodes: Children): void {
+  detailBody.replaceChildren(...flatKids(nodes));
+  detail.classList.toggle('wide', !!shownKey); // things with an address get the roomier panel
   detail.hidden = false; detail.scrollTop = 0;
 }
-function closeDetail(): void { detail.hidden = true; }
-type Row = [string, Node | string] | null | undefined | false | '';
-const dl = (rows: Row[]) => el('dl', {}, rows.filter((r): r is [string, Node | string] => !!r)
-  .flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]));
+function closeDetail(): void { detail.hidden = true; interior?.markValidators([]); }
 
 function showInfo(name: ViewName): void {
   if (!current) return;
@@ -227,116 +205,8 @@ function showInfo(name: ViewName): void {
   openDetail(el('span', { class: 'tag' }, 'District'), el('h2', {}, title), el('p', {}, text));
 }
 
-function showValidator(v: Validator): void {
-  if (!current || !feed) return;
-  const site = safeUrl(v.website);
-  openDetail(
-    el('span', { class: 'tag' }, `Validator · rank #${v.index + 1}`),
-    el('h2', {}, v.moniker),
-    v.details ? el('p', {}, v.details.slice(0, 220)) : null,
-    dl([
-      ['Voting power', `${(v.power * 100).toFixed(2)}%`],
-      !current.poa && ['Staked', `${fmt(v.tokens)} ${current.symbol}`],
-      ['Commission', `${(v.commission * 100).toFixed(1)}%`],
-      site && ['Website', link(site, new URL(site).hostname)],
-    ]),
-    feed.mode === 'live' ? link(`${current.explorer}/staking/${v.operator}`, 'Open in explorer ↗') : null,
-  );
-}
-
-const TX_LIST = 25;
-const kindDot = (k: Kind) => el('span', { class: 'dot', style: `display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:${KINDS[k].color}` });
-
-function showBlock(b: Block): void {
-  if (!current || !feed) return;
-  const chain = current.key, live = feed.mode === 'live';
-  const counts: Partial<Record<Kind, number>> = {};
-  b.txs.forEach((t) => { counts[t.kind] = (counts[t.kind] || 0) + 1; });
-  openDetail(
-    el('span', { class: 'tag' }, 'Block'),
-    el('h2', {}, `#${fmt(b.height)}`),
-    dl([
-      ['Time', new Date(b.time).toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' })],
-      ['Proposer', b.proposer ? ilink({ chain, entity: { kind: 'validator', operator: b.proposer.operator } }, b.proposer.moniker) : 'unknown'],
-      ['Transactions', String(b.txs.length)],
-      ['Commit signatures', `${b.signers.size}/${feed.validators.length}`],
-    ]),
-    el('ul', {}, (Object.entries(counts) as [Kind, number][]).map(([k, n]) => el('li', {},
-      el('span', {}, kindDot(k), KINDS[k].label),
-      el('span', {}, `× ${n}`)))),
-    b.txs.length ? el('p', {}, el('strong', {}, 'Transactions')) : null,
-    el('ul', {}, b.txs.slice(0, TX_LIST).map((t) => el('li', {},
-      el('span', {}, kindDot(t.kind), t.label),
-      el('span', { class: 'mono' }, live && t.hash ? ilink({ chain, entity: { kind: 'tx', hash: t.hash } }, shortHash(t.hash)) : t.hash ? shortHash(t.hash) : '')))),
-    b.txs.length > TX_LIST ? el('p', { class: 'mono' }, `+ ${b.txs.length - TX_LIST} more`) : null,
-    live ? el('div', { class: 'pager' },
-      b.height > 1 ? ilink({ chain, entity: { kind: 'block', height: b.height - 1 } }, `‹ #${fmt(b.height - 1)}`) : el('span'),
-      b.height < feed.height ? ilink({ chain, entity: { kind: 'block', height: b.height + 1 } }, `#${fmt(b.height + 1)} ›`) : el('span')) : null,
-    live ? link(`${current.explorer}/block/${b.height}`, 'Open in explorer ↗') : null,
-  );
-}
-
-function showTx(tx: TxDetail): void {
-  if (!current) return;
-  const chain = current.key;
-  const when = new Date(tx.time);
-  openDetail(
-    el('span', { class: 'tag' }, 'Transaction'),
-    el('h2', {}, shortHash(tx.hash)),
-    el('p', { class: 'mono' }, tx.hash),
-    dl([
-      ['Status', el('span', { class: tx.ok ? 'ok' : 'fail' }, tx.ok ? 'Success' : `Failed (code ${tx.code})`)],
-      ['Block', ilink({ chain, entity: { kind: 'block', height: tx.height } }, `#${fmt(tx.height)}`)],
-      !Number.isNaN(when.getTime()) && ['Time', when.toLocaleString([], { dateStyle: 'medium', timeStyle: 'medium' })],
-      ['Fee', tx.fee || 'none'],
-      ['Gas', `${fmt(tx.gasUsed)} / ${fmt(tx.gasWanted)}`],
-      tx.memo && ['Memo', tx.memo.slice(0, 160)],
-    ]),
-    tx.log ? el('p', { class: 'fail' }, tx.log.slice(0, 240)) : null,
-    el('p', {}, el('strong', {}, `${tx.msgs.length} message${tx.msgs.length === 1 ? '' : 's'}`)),
-    el('ul', {}, tx.msgs.slice(0, TX_LIST).map((m, i) => el('li', {}, el('span', {}, kindDot(tx.kind), m), el('span', {}, `#${i + 1}`)))),
-    tx.msgs.length > TX_LIST ? el('p', { class: 'mono' }, `+ ${tx.msgs.length - TX_LIST} more`) : null,
-    link(`${current.explorer}/tx/${tx.hash}`, 'Open in explorer ↗'),
-  );
-}
-
-function showAccount(a: AccountDetail): void {
-  if (!current) return;
-  openDetail(
-    el('span', { class: 'tag' }, 'Account'),
-    el('h2', {}, `${a.address.slice(0, 12)}…${a.address.slice(-6)}`),
-    el('p', { class: 'mono' }, a.address),
-    a.staked != null ? dl([['Staked', a.staked], ['Delegations', String(a.delegations)]]) : null,
-    el('p', {}, el('strong', {}, 'Balances')),
-    a.balances.length
-      ? el('ul', {}, a.balances.map((b) => el('li', {}, el('span', {}, b.amount), el('span', {}, b.native ? 'native' : ''))))
-      : el('p', {}, 'This address holds no tokens.'),
-    a.more > 0 ? el('p', { class: 'mono' }, `+ ${a.more} more`) : null,
-    link(`${current.explorer}/account/${a.address}`, 'Open in explorer ↗'),
-  );
-}
-
-function showProposal(p: Proposal): void {
-  if (!current || !feed) return;
-  const st = statusStyle(p.status);
-  const { yes, no, abstain, veto } = p.tally;
-  const total = yes + no + abstain + veto;
-  const pct = (v: number) => (total ? `${((v / total) * 100).toFixed(1)}%` : '—');
-  const parts: [number, string][] = [[yes, '#4ade80'], [no, '#f87171'], [veto, '#b91c1c'], [abstain, '#94a3b8']];
-  const end = p.votingEnd ? new Date(p.votingEnd) : null;
-  openDetail(
-    el('span', { class: 'tag', style: `color:${st.color}` }, `Proposal #${p.id} · ${st.label}`),
-    el('h2', {}, p.title),
-    el('div', { class: 'bar' }, parts.map(([v, c]) => el('i', { style: `width:${total ? (v / total) * 100 : 0}%;background:${c}` }))),
-    dl([
-      ['Yes', pct(yes)], ['No', pct(no)], ['No with veto', pct(veto)], ['Abstain', pct(abstain)],
-      ['Votes cast', `${compact(total)} ${current.symbol}`],
-      end && [p.status === 'VOTING_PERIOD' ? 'Voting ends' : 'Voting ended', end.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })],
-    ]),
-    el('p', {}, p.summary.length > 420 ? p.summary.slice(0, 420) + '…' : p.summary),
-    feed.mode === 'live' ? link(`${current.explorer}/gov/${p.id}`, 'Read & vote in explorer ↗') : null,
-  );
-}
+const panelCtx = (): PanelCtx | null => (current && feed
+  ? { chain: current, live: feed.mode === 'live', validators: feed.validators, height: feed.height } : null);
 
 function showPort(): void {
   if (!current || !feed) return;
@@ -504,6 +374,7 @@ function resetHud(chain: Planet | null): void {
   stepEls.forEach((e) => e.classList.remove('on', 'done'));
   lastBlock = null; witnessed = 0; lastIbcAt = 0; replayIdx = 0; shownStep = -2;
   shownKey = null; lookupSeq++;
+  timeline.reset();
 }
 
 function startFeed(chain: Planet): void {
@@ -511,6 +382,7 @@ function startFeed(chain: Planet): void {
   const inside = interior!;
 
   feed.on('status', ({ mode: m, reconnecting }) => {
+    timeline.refresh();
     const badge = $('#net-badge');
     badge.className = `badge ${reconnecting ? 'warn' : m}`;
     badge.textContent = reconnecting ? 'reconnecting…' : m === 'live' ? 'LIVE' : 'SIMULATED';
@@ -533,6 +405,7 @@ function startFeed(chain: Planet): void {
     witnessed++;
     inside.onBlock(b);
     setStat('#s-height', fmt(b.height), true);
+    timeline.refresh();
     setStat('#s-time', `${f.avgBlockTime.toFixed(2)} s`);
     setStat('#s-txs', String(b.txs.length), true);
     $('#witnessed').textContent = `${witnessed} block${witnessed > 1 ? 's' : ''} witnessed`;
@@ -632,6 +505,7 @@ function sync(): void {
 
 /** The detail panel is being used for something without an address (a district): forget the routed entity. */
 function dropEntity(): void {
+  interior?.markValidators([]);
   lookupSeq++;
   shownKey = null;
   if (route.entity) {
@@ -681,6 +555,8 @@ async function showEntity(entity: Entity | null): Promise<void> {
   try {
     await f.whenReady(); // validators are needed to name proposers and find towers
     if (stale()) return;
+    const ctx = panelCtx()!;
+    inside.markValidators([]);
     const needsNode = entity.kind === 'tx' || entity.kind === 'account';
     if (needsNode && f.mode !== 'live') {
       message('Unavailable', title, `${chain.name} is running as a simulation, so there is no real chain to look this up on.`);
@@ -688,9 +564,12 @@ async function showEntity(entity: Entity | null): Promise<void> {
     }
     switch (entity.kind) {
       case 'block': {
+        // Put it in the helix first (time-travelling there if it is old), then open it.
+        await timeline.reveal(entity.height);
+        if (stale()) return;
         const b = inside.findBlock(entity.height) ?? await f.fetchBlock(entity.height);
         if (stale()) return;
-        showBlock(b);
+        openDetail(blockPanel(b, ctx));
         const at = inside.focusBlock(b.height);
         if (at && fly) lookAt(at, 26, 5);
         break;
@@ -698,7 +577,9 @@ async function showEntity(entity: Entity | null): Promise<void> {
       case 'tx': {
         const tx = await fetchTx(chain, entity.hash);
         if (stale()) return;
-        showTx(tx);
+        openDetail(txPanel(tx, ctx));
+        await timeline.reveal(tx.height);
+        if (stale()) return;
         const at = inside.focusBlock(tx.height);
         if (at && fly) lookAt(at, 26, 5);
         break;
@@ -706,7 +587,7 @@ async function showEntity(entity: Entity | null): Promise<void> {
       case 'validator': {
         const v = f.validators.find((x) => x.operator === entity.operator);
         if (!v) throw new NotFound(`No bonded validator with this address on ${chain.name}. It may be jailed, unbonded or from another chain.`);
-        showValidator(v);
+        openDetail(validatorPanel(v, ctx));
         const top = inside.focusValidator(v.operator);
         if (top && fly) lookAt(top, 40, 30);
         break;
@@ -714,13 +595,17 @@ async function showEntity(entity: Entity | null): Promise<void> {
       case 'account': {
         const a = await fetchAccount(chain, entity.address);
         if (stale()) return;
-        showAccount(a);
+        openDetail(accountPanel(a, ctx));
+        // An account is also a place: light the towers it stakes with.
+        const staked = a.staking?.delegations.map((d) => d.operator) ?? [];
+        inside.markValidators(staked);
+        if (staked.length && fly) flyTo(VIEWS.validators.pos, VIEWS.validators.target);
         break;
       }
       case 'proposal': {
         const p = await f.fetchProposal(entity.id);
         if (stale()) return;
-        showProposal(p);
+        openDetail(proposalPanel(p, ctx));
         if (fly) flyTo(VIEWS.gov.pos, VIEWS.gov.target);
         break;
       }
@@ -733,6 +618,12 @@ async function showEntity(entity: Entity | null): Promise<void> {
     message('Not found', title, text);
   }
 }
+
+const timeline = initTimeline({
+  feed: () => feed,
+  interior: () => interior,
+  lookAtHelix: () => { stopTour(); flyTo([46, 46, 54], [0, 34, 0], 1.6); },
+});
 
 const search = initSearch({
   current: () => current,

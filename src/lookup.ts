@@ -2,9 +2,11 @@
 // whether or not its planet is being visited.
 
 import { PLANETS } from './chains';
-import { VALIDATORS_PATH, formatToken, shortType, toValidators, txKind } from './data';
+import { VALIDATORS_PATH, formatAmount, toValidators, txKind } from './data';
 import { isNotFound, lcdFor } from './lcd';
 import type { Kind, Msg, Planet, Validator } from './types';
+
+export interface TxEvent { type: string; attrs: [string, string][] }
 
 export interface TxDetail {
   hash: string;
@@ -12,29 +14,50 @@ export interface TxDetail {
   time: string;
   ok: boolean;
   code: number;
+  codespace: string;
   /** the node's error text for a failed tx */
   log: string;
   gasUsed: number;
   gasWanted: number;
   fee: string;
   memo: string;
+  /** the account that signed and paid, when the node reports it */
+  signer: string;
   kind: Kind;
-  msgs: string[];
+  msgs: Msg[];
+  events: TxEvent[];
 }
+
+export interface Delegation { operator: string; amount: string; share: number; reward: string }
+export interface Unbonding { operator: string; amount: string; completes: string }
 
 export interface AccountDetail {
   address: string;
+  /** e.g. "Account", "Module account · bonded_tokens_pool", "Vesting account" */
+  type: string;
+  /** number of transactions signed so far; null when unknown or never used */
+  sequence: number | null;
   balances: { amount: string; native: boolean }[];
-  /** how many more balances exist beyond the ones listed */
-  more: number;
-  /** total delegated, formatted; null when the chain has no staking or the query failed */
-  staked: string | null;
-  delegations: number;
+  /** null when the chain has no staking or the node could not answer */
+  staking: {
+    staked: string;
+    rewards: string;
+    unbonding: string;
+    delegations: Delegation[];
+    unbondings: Unbonding[];
+  } | null;
 }
 
 export class NotFound extends Error {}
 
 const txCache = new Map<string, TxDetail>();
+
+/** The signer is not in the tx body in a readable form, but the ante handler emits it as an event. */
+function signerOf(events: TxEvent[]): string {
+  const attr = (type: string, key: string) => events.find((e) => e.type === type && e.attrs.some(([k]) => k === key))
+    ?.attrs.find(([k]) => k === key)?.[1] ?? '';
+  return attr('tx', 'fee_payer') || attr('tx', 'acc_seq').split('/')[0] || attr('message', 'sender');
+}
 
 export async function fetchTx(chain: Planet, hash: string, { firstAnswer = false } = {}): Promise<TxDetail> {
   const key = `${chain.key}:${hash}`;
@@ -48,21 +71,27 @@ export async function fetchTx(chain: Planet, hash: string, { firstAnswer = false
   }
   const r = d.tx_response;
   const msgs: Msg[] = d.tx?.body?.messages || [];
-  const types = msgs.map((m) => m['@type'] || '');
   const fee: { amount: string; denom: string }[] = d.tx?.auth_info?.fee?.amount || [];
+  const events: TxEvent[] = ((r.events || []) as any[]).map((e) => ({
+    type: String(e.type),
+    attrs: ((e.attributes || []) as any[]).map((a): [string, string] => [String(a.key ?? ''), String(a.value ?? '')]),
+  }));
   const tx: TxDetail = {
     hash: r.txhash,
     height: Number(r.height),
     time: r.timestamp,
     ok: !r.code,
     code: Number(r.code || 0),
+    codespace: r.codespace || '',
     log: r.code ? String(r.raw_log || '') : '',
     gasUsed: Number(r.gas_used),
     gasWanted: Number(r.gas_wanted),
     fee: fee.map((c) => formatAmount(c.amount, c.denom)).join(' + '),
     memo: d.tx?.body?.memo || '',
-    kind: txKind(types),
-    msgs: types.map((t) => shortType(t)),
+    signer: signerOf(events),
+    kind: txKind(msgs.map((m) => m['@type'] || '')),
+    msgs,
+    events,
   };
   txCache.set(key, tx);
   return tx;
@@ -74,41 +103,62 @@ export async function findTxChain(hash: string): Promise<Planet | null> {
   return hits.find((p) => p) ?? null;
 }
 
-/** Like formatToken, but never drops the number: unknown denoms are shown shortened. */
-function formatAmount(amount: string, denom: string): string {
-  const nice = formatToken(amount, denom);
-  if (nice && nice !== 'IBC asset' && /\d/.test(nice)) return nice;
-  const short = denom.length > 18 ? `${denom.slice(0, 10)}…${denom.slice(-4)}` : denom;
-  return `${Number(amount).toLocaleString('en-US')} ${short}`;
+function accountType(acc: any): string {
+  const t = String(acc?.['@type'] || '').split('.').pop() || '';
+  if (t === 'ModuleAccount') return `Module account · ${acc.name}`;
+  if (/Vesting/.test(t)) return 'Vesting account';
+  if (t === 'BaseAccount' || !t) return 'Account';
+  return t.replace(/([a-z])([A-Z])/g, '$1 $2');
 }
 
+/** Balances, plus where the account's stake is: delegations with pending rewards, and unbonding entries. */
 export async function fetchAccount(chain: Planet, address: string): Promise<AccountDetail> {
   const lcd = lcdFor(chain);
   const native = `u${chain.symbol.toLowerCase()}`;
-  let bank: any;
-  try {
-    bank = await lcd.get(`/cosmos/bank/v1beta1/balances/${address}?pagination.limit=200`);
-  } catch (e) {
-    throw isNotFound(e) ? new NotFound(`“${address}” is not a valid ${chain.name} address.`) : e;
+  const optional = (path: string) => lcd.get(path).catch(() => null);
+  const [bankR, auth, del, rew, unb] = await Promise.all([
+    lcd.get(`/cosmos/bank/v1beta1/balances/${address}?pagination.limit=200`).catch((e: unknown) => e),
+    optional(`/cosmos/auth/v1beta1/accounts/${address}`),
+    chain.poa ? null : optional(`/cosmos/staking/v1beta1/delegations/${address}?pagination.limit=200`),
+    chain.poa ? null : optional(`/cosmos/distribution/v1beta1/delegators/${address}/rewards`),
+    chain.poa ? null : optional(`/cosmos/staking/v1beta1/delegators/${address}/unbonding_delegations?pagination.limit=100`),
+  ]);
+  if (bankR instanceof Error || !bankR?.balances) {
+    throw isNotFound(bankR) ? new NotFound(`“${address}” is not a valid ${chain.name} address.`) : bankR;
   }
-  const coins: { denom: string; amount: string }[] = bank.balances || [];
+  const coins: { denom: string; amount: string }[] = bankR.balances;
   coins.sort((a, b) => Number(b.denom === native) - Number(a.denom === native) || Number(a.denom.startsWith('ibc/')) - Number(b.denom.startsWith('ibc/')));
-  let staked: string | null = null, delegations = 0;
-  if (!chain.poa) {
-    try {
-      const d = await lcd.get(`/cosmos/staking/v1beta1/delegations/${address}?pagination.limit=200`);
-      const rows: any[] = d.delegation_responses || [];
-      delegations = rows.length;
-      staked = formatAmount(String(rows.reduce((s, x) => s + Number(x.balance?.amount || 0), 0)), native);
-    } catch { /* staking query unavailable: show balances only */ }
+
+  let staking: AccountDetail['staking'] = null;
+  if (del) {
+    const nativeOf = (list: any[] | undefined) => Number(list?.find((c) => c.denom === native)?.amount || 0);
+    const rewardBy = new Map<string, number>(((rew?.rewards || []) as any[]).map((r) => [r.validator_address, nativeOf(r.reward)]));
+    const rows = ((del.delegation_responses || []) as any[])
+      .map((x) => ({ operator: String(x.delegation?.validator_address), n: Number(x.balance?.amount || 0) }))
+      .filter((x) => x.n > 0)
+      .sort((a, b) => b.n - a.n);
+    const total = rows.reduce((s, x) => s + x.n, 0);
+    const unbondings = ((unb?.unbonding_responses || []) as any[]).flatMap((u) => ((u.entries || []) as any[]).map((e) => ({
+      operator: String(u.validator_address), n: Number(e.balance || 0), completes: String(e.completion_time || ''),
+    }))).sort((a, b) => a.completes.localeCompare(b.completes));
+    staking = {
+      staked: formatAmount(total, native),
+      rewards: formatAmount(nativeOf(rew?.total), native),
+      unbonding: formatAmount(unbondings.reduce((s, u) => s + u.n, 0), native),
+      delegations: rows.map((x) => ({
+        operator: x.operator, amount: formatAmount(x.n, native), share: total ? x.n / total : 0,
+        reward: formatAmount(rewardBy.get(x.operator) || 0, native),
+      })),
+      unbondings: unbondings.map((u) => ({ operator: u.operator, amount: formatAmount(u.n, native), completes: u.completes })),
+    };
   }
-  const shown = coins.slice(0, 8);
+  const base = auth?.account?.base_account ?? auth?.account?.base_vesting_account?.base_account ?? auth?.account;
   return {
     address,
-    balances: shown.map((c) => ({ amount: formatAmount(c.amount, c.denom), native: c.denom === native })),
-    more: coins.length - shown.length,
-    staked,
-    delegations,
+    type: accountType(auth?.account),
+    sequence: base?.sequence != null ? Number(base.sequence) : null,
+    balances: coins.map((c) => ({ amount: formatAmount(c.amount, c.denom), native: c.denom === native })),
+    staking,
   };
 }
 
